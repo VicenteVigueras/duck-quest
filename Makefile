@@ -50,7 +50,7 @@ $(TARGET): $(BUILD_DIR) $(OBJS)
 $(BUILD_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/entities.h $(SRC_DIR)/systems.h $(SRC_DIR)/dungeon.h $(SRC_DIR)/renderer.h $(SRC_DIR)/combat.h $(SRC_DIR)/items.h $(SRC_DIR)/boss.h $(SRC_DIR)/minimap.h
 	$(CC) $(CFLAGS) $(RAYLIB_INCLUDE) -c $< -o $@
 
-$(BUILD_DIR)/entities.o: $(SRC_DIR)/entities.c $(SRC_DIR)/entities.h $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/combat.h $(SRC_DIR)/dungeon.h
+$(BUILD_DIR)/entities.o: $(SRC_DIR)/entities.c $(SRC_DIR)/entities.h $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/combat.h $(SRC_DIR)/dungeon.h $(SRC_DIR)/items.h
 	$(CC) $(CFLAGS) $(RAYLIB_INCLUDE) -c $< -o $@
 
 $(BUILD_DIR)/systems.o: $(SRC_DIR)/systems.c $(SRC_DIR)/systems.h $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/renderer.h $(SRC_DIR)/dungeon.h $(SRC_DIR)/minimap.h
