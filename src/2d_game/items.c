@@ -25,7 +25,7 @@ void ItemSpawn(ItemType type, Vector2 pos, int roomId, int price) {
             worldItems[i].price = price;
             // Pop/jump effect for dropped items (not shop items)
             if (price == 0 && (type == ITEM_COIN || type == ITEM_HEART ||
-                type == ITEM_DAMAGE_UP || type == ITEM_SPEED_UP)) {
+                type == ITEM_DAMAGE_UP || type == ITEM_SPEED_UP || type == ITEM_RUBBER_DUCK)) {
                 worldItems[i].spawnVelY = -120.0f - (float)GetRandomValue(0, 60);
                 worldItems[i].spawnGround = pos.y;
                 worldItems[i].pos.y -= 5.0f; // Start slightly above
@@ -94,6 +94,9 @@ static void ApplyItem(ItemType type) {
             }
             break;
         }
+        case ITEM_RUBBER_DUCK:
+            player.immunityTimer = 5.0f; // 5 seconds of immunity
+            break;
         default: break;
     }
 }
@@ -167,6 +170,7 @@ static const char *GetItemName(ItemType type) {
         case ITEM_COIN:            return "COIN";
         case ITEM_SHIELD:          return "SHIELD";
         case ITEM_BOMB:            return "BOMB";
+        case ITEM_RUBBER_DUCK:     return "RUBBER DUCK";
         default:                   return "";
     }
 }
@@ -181,6 +185,7 @@ static const char *GetItemDesc(ItemType type) {
         case ITEM_COIN:            return "Currency";
         case ITEM_SHIELD:          return "Blocks hits for 8s";
         case ITEM_BOMB:            return "Damages all enemies";
+        case ITEM_RUBBER_DUCK:     return "5s attack immunity";
         default:                   return "";
     }
 }
