@@ -150,7 +150,7 @@ void DungeonGenerate(Dungeon *dun, unsigned int seed) {
         }
     }
 
-    // Lock boss room door (the connection leading to the boss room)
+    // Lock ALL boss room doors (every connection leading to the boss room)
     for (int d = 0; d < 4; d++) {
         int nid = dun->rooms[farthestId].connections[d];
         if (nid >= 0) {
@@ -162,7 +162,7 @@ void DungeonGenerate(Dungeon *dun, unsigned int seed) {
                 }
             }
             dun->rooms[farthestId].doorLocked[d] = true;
-            break; // Only lock one entrance
+            // Don't break — lock ALL entrances
         }
     }
 
@@ -374,20 +374,20 @@ void DungeonSpawnRoomEnemies(int roomId) {
         count = 2 + (room->seed % 2);
         for (int i = 0; i < count; i++) types[i] = ENEMY_SLIME;
     } else if (dist <= 3) {
-        // Medium: slimes and a skeleton
+        // Medium: slimes, skeleton, maybe wizard
         count = 3 + (room->seed % 2);
         types[0] = ENEMY_SLIME;
         types[1] = ENEMY_SLIME;
         types[2] = ENEMY_SKELETON;
-        if (count > 3) types[3] = ENEMY_SLIME;
+        if (count > 3) types[3] = (room->seed % 3 == 0) ? ENEMY_WIZARD : ENEMY_SLIME;
     } else {
-        // Hard: skeletons, slimes, maybe turret
+        // Hard: skeletons, slimes, turret, wizard
         count = 4 + (room->seed % 2);
         if (count > MAX_ENEMIES_PER_ROOM) count = MAX_ENEMIES_PER_ROOM;
         types[0] = ENEMY_SKELETON;
         types[1] = ENEMY_SKELETON;
         types[2] = ENEMY_SLIME;
-        types[3] = ENEMY_SLIME;
+        types[3] = ENEMY_WIZARD;
         if (count > 4) types[4] = ENEMY_TURRET;
         if (count > 5) types[5] = ENEMY_SKELETON;
     }
@@ -445,6 +445,15 @@ void DungeonSpawnRoomEnemies(int roomId) {
                     ROOM_X + ROOM_WIDTH * (0.2f + (float)(room->seed % 60) / 100.0f),
                     ROOM_Y + ROOM_HEIGHT * (0.2f + (float)((room->seed / 7) % 60) / 100.0f)
                 };
+                break;
+            case ENEMY_WIZARD:
+                e->health = WIZARD_HEALTH;
+                e->maxHealth = WIZARD_HEALTH;
+                e->radius = WIZARD_SIZE;
+                e->wizardCastTimer = 0.0f;
+                e->wizardCasting = false;
+                e->wizardFloatPhase = (float)(room->seed + i) * 1.3f;
+                e->wizardMouthTimer = 0.0f;
                 break;
             default: break;
         }
