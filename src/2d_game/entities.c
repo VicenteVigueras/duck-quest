@@ -1,93 +1,9 @@
 #include "entities.h"
-#include "systems.h"
+#include "combat.h"
+#include "dungeon.h"
+#include "utils.h"
 #include <math.h>
-
-/*
- * ============================================================================
- * UTILITY FUNCTIONS
- * ============================================================================
- */
-
-// Get the visual offset for a room in the grid
-static Vector2 GetRoomOffset(int roomX, int roomY) {
-    return (Vector2){
-        roomX * ROOM_WIDTH,
-        roomY * ROOM_HEIGHT
-    };
-}
-
-float Clamp(float v, float min, float max) {
-    return v < min ? min : (v > max ? max : v);
-}
-
-float Lerp(float a, float b, float t) {
-    return a + (b - a) * t;
-}
-
-float NormalizeAngle(float angle) {
-    while (angle > PI) angle -= 2.0f * PI;
-    while (angle < -PI) angle += 2.0f * PI;
-    return angle;
-}
-
-Vector2 Vec2Add(Vector2 a, Vector2 b) {
-    return (Vector2){ a.x + b.x, a.y + b.y };
-}
-
-Vector2 Vec2Sub(Vector2 a, Vector2 b) {
-    return (Vector2){ a.x - b.x, a.y - b.y };
-}
-
-Vector2 Vec2Scale(Vector2 v, float s) {
-    return (Vector2){ v.x * s, v.y * s };
-}
-
-float Vec2Length(Vector2 v) {
-    return sqrtf(v.x * v.x + v.y * v.y);
-}
-
-Vector2 Vec2Normalize(Vector2 v) {
-    float len = Vec2Length(v);
-    if (len > 0.0f) {
-        return (Vector2){ v.x / len, v.y / len };
-    }
-    return (Vector2){ 0.0f, 0.0f };
-}
-
-float Vec2Distance(Vector2 a, Vector2 b) {
-    return Vec2Length(Vec2Sub(b, a));
-}
-
-/*
- * ============================================================================
- * COLLISION & PHYSICS
- * ============================================================================
- */
-
-bool CircleCollision(Vector2 p1, float r1, Vector2 p2, float r2) {
-    return Vec2Distance(p1, p2) < (r1 + r2);
-}
-
-void ResolveCircleCollision(Vector2 *pos1, float r1, Vector2 *vel1, 
-                            Vector2 *pos2, float r2, Vector2 *vel2) {
-    Vector2 delta = Vec2Sub(*pos2, *pos1);
-    float dist = Vec2Length(delta);
-    
-    if (dist < r1 + r2 && dist > 0.0f) {
-        Vector2 normal = Vec2Normalize(delta);
-        float overlap = (r1 + r2) - dist;
-        
-        // Push entities apart equally
-        Vector2 separation = Vec2Scale(normal, overlap * 0.5f);
-        *pos1 = Vec2Sub(*pos1, separation);
-        *pos2 = Vec2Add(*pos2, separation);
-    }
-}
-
-void ApplyKnockback(Vector2 *knockback, Vector2 direction, float strength) {
-    Vector2 impulse = Vec2Scale(Vec2Normalize(direction), strength);
-    *knockback = Vec2Add(*knockback, impulse);
-}
+#include <string.h>
 
 /*
  * ============================================================================
@@ -96,438 +12,691 @@ void ApplyKnockback(Vector2 *knockback, Vector2 direction, float strength) {
  */
 
 void PlayerInit(void) {
-    playerSpawnPoint = (Vector2){ 
-        ROOM_X + ROOM_WIDTH * 0.5f, 
-        ROOM_Y + ROOM_HEIGHT * 0.5f 
+    memset(&player, 0, sizeof(Player));
+    playerSpawnPoint = (Vector2){
+        ROOM_X + ROOM_WIDTH * 0.5f,
+        ROOM_Y + ROOM_HEIGHT * 0.5f
     };
-    
+
     player.pos = playerSpawnPoint;
-    player.velocity = (Vector2){ 0.0f, 0.0f };
-    player.knockback = (Vector2){ 0.0f, 0.0f };
     player.health = PLAYER_MAX_HEALTH;
     player.maxHealth = PLAYER_MAX_HEALTH;
-    player.facing = 0;
-    player.hasSword = false;
-    player.isAttacking = false;
-    player.attackTimer = 0.0f;
-    player.attackCooldown = 0.0f;
-    player.swordAngle = 0.0f;
-    player.animTimer = 0.0f;
-    player.animFrame = 0;
-    player.moving = false;
-    player.invulnTimer = 0.0f;
     player.radius = PLAYER_SIZE * 0.85f;
+    player.hasSword = false;
+    player.inventory.heartContainers = 0;
+    player.inventory.coins = 0;
+    player.inventory.keys = 0;
+    player.inventory.damageBonus = 0;
+    player.inventory.speedBonus = 0;
+    player.inventory.enemiesKilled = 0;
+    player.inventory.roomsExplored = 1;
 }
 
 void PlayerRespawn(void) {
-    // Reset position and physics
     player.pos = playerSpawnPoint;
-    player.velocity = (Vector2){ 0.0f, 0.0f };
-    player.knockback = (Vector2){ 0.0f, 0.0f };
-    player.health = PLAYER_MAX_HEALTH;
-    
-    // Respawn sword if player had it
-    if (player.hasSword) {
-        sword.active = true;
-        sword.pos = swordSpawnPoint;
-        sword.respawnTimer = 0.0f;
-        ParticlesBurst(swordSpawnPoint, 15, (Color){ 255, 220, 100, 255 }, 
-                      PTYPE_SPARK, 80.0f, 150.0f);
-    }
-    
-    // Reset combat state
-    player.hasSword = false;
+    player.velocity = (Vector2){ 0, 0 };
+    player.knockback = (Vector2){ 0, 0 };
+    player.health = player.maxHealth;
     player.isAttacking = false;
-    player.attackTimer = 0.0f;
-    player.attackCooldown = 0.0f;
-    player.invulnTimer = 1.0f;
-    
-    ParticlesBurst(player.pos, 20, (Color){ 100, 200, 255, 200 }, 
-                  PTYPE_SPARK, 100.0f, 200.0f);
+    player.attackTimer = 0;
+    player.attackCooldown = 0;
+    player.invulnTimer = PLAYER_INVULN_TIME;
+
+    // Respawn particles
+    for (int i = 0; i < 20; i++) {
+        float angle = ((float)GetRandomValue(0, 628)) / 100.0f;
+        float speed = 80.0f + (float)GetRandomValue(0, 120);
+        if (particles.count < MAX_PARTICLES) {
+            Particle *pt = &particles.pool[particles.count++];
+            pt->pos = player.pos;
+            pt->vel = (Vector2){ cosf(angle) * speed, sinf(angle) * speed };
+            pt->life = 0.5f;
+            pt->maxLife = 0.5f;
+            pt->size = 3.0f;
+            pt->color = (Color){ 100, 200, 255, 200 };
+            pt->type = PTYPE_SPARK;
+        }
+    }
 }
 
 void PlayerUpdate(float dt) {
-    // Update timers
-    if (player.attackCooldown > 0.0f) player.attackCooldown -= dt;
-    if (player.invulnTimer > 0.0f) player.invulnTimer -= dt;
-    
-    // Handle attack animation
+    // Timers
+    if (player.attackCooldown > 0) player.attackCooldown -= dt;
+    if (player.invulnTimer > 0) player.invulnTimer -= dt;
+    if (player.flashTimer > 0) player.flashTimer -= dt;
+    if (player.shieldTimer > 0) player.shieldTimer -= dt;
+
+    // Attack animation
     if (player.isAttacking) {
         player.attackTimer += dt;
         if (player.attackTimer >= SWORD_SWING_DURATION) {
             player.isAttacking = false;
-            player.attackTimer = 0.0f;
+            player.attackTimer = 0;
         }
-        
-        // Animate sword swing from -90° to +90°
         float progress = player.attackTimer / SWORD_SWING_DURATION;
         player.swordAngle = -90.0f + progress * 180.0f;
     }
-    
-    // Handle movement input
-    Vector2 input = { 0.0f, 0.0f };
+
+    // Movement input
+    Vector2 input = { 0, 0 };
     if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) input.x -= 1.0f;
     if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) input.x += 1.0f;
     if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) input.y -= 1.0f;
     if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) input.y += 1.0f;
-    
-    player.moving = (input.x != 0.0f || input.y != 0.0f);
-    
+
+    player.moving = (input.x != 0 || input.y != 0);
+    float speed = PLAYER_SPEED + player.inventory.speedBonus;
+
     if (player.moving) {
-        // Normalize diagonal movement
         input = Vec2Normalize(input);
-        player.velocity = Vec2Scale(input, PLAYER_SPEED);
-        
-        // Update facing direction (prioritize horizontal movement)
+        player.velocity = Vec2Scale(input, speed);
+
         if (fabsf(input.x) > fabsf(input.y)) {
-            player.facing = input.x > 0.0f ? 0 : 2;
+            player.facing = input.x > 0 ? 0 : 2;
         } else {
-            player.facing = input.y > 0.0f ? 1 : 3;
+            player.facing = input.y > 0 ? 1 : 3;
         }
-        
-        // Update animation
+
         player.animTimer += dt;
         if (player.animTimer >= ANIM_SPEED) {
             player.animTimer -= ANIM_SPEED;
             player.animFrame = (player.animFrame + 1) % 4;
         }
     } else {
-        player.velocity = (Vector2){ 0.0f, 0.0f };
+        player.velocity = (Vector2){ 0, 0 };
         player.animFrame = 0;
-        player.animTimer = 0.0f;
+        player.animTimer = 0;
     }
-    
-    // Apply knockback physics
+
+    // Knockback
     player.pos = Vec2Add(player.pos, Vec2Scale(player.knockback, dt));
-    player.knockback = Vec2Scale(player.knockback, 1.0f - (KNOCKBACK_DECAY * dt));
-    
-    // Stop small knockback values
-    if (Vec2Length(player.knockback) < 10.0f) {
-        player.knockback = (Vector2){ 0.0f, 0.0f };
-    }
-    
-    // Apply movement
+    player.knockback = Vec2Scale(player.knockback, 1.0f - KNOCKBACK_DECAY * dt);
+    if (Vec2Length(player.knockback) < 10.0f) player.knockback = (Vector2){ 0, 0 };
+
+    // Movement
     player.pos = Vec2Add(player.pos, Vec2Scale(player.velocity, dt));
-    
-    // Keep player within room bounds
-    player.pos.x = Clamp(player.pos.x, ROOM_X + player.radius, 
-                         ROOM_X + ROOM_WIDTH - player.radius);
-    player.pos.y = Clamp(player.pos.y, ROOM_Y + player.radius, 
-                         ROOM_Y + ROOM_HEIGHT - player.radius);
-    
-    // Handle sword attack input
-    if ((IsKeyPressed(KEY_SPACE) || IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) && 
-        player.hasSword && player.attackCooldown <= 0.0f && !player.isAttacking) {
-        
+
+    // Room bounds (accounting for walls, but allow passage through doorways)
+    {
+        float wt = WALL_THICKNESS * TILE_SIZE;
+        float minX = ROOM_X + wt + player.radius;
+        float maxX = ROOM_X + ROOM_WIDTH - wt - player.radius;
+        float minY = ROOM_Y + wt + player.radius;
+        float maxY = ROOM_Y + ROOM_HEIGHT - wt - player.radius;
+
+        DungeonRoom *room = DungeonGetCurrentRoom();
+        float doorHalfW = DOORWAY_WIDTH * 0.5f;
+        float doorHalfH = DOORWAY_HEIGHT * 0.5f;
+        float cx = ROOM_X + ROOM_WIDTH * 0.5f;
+        float cy = ROOM_Y + ROOM_HEIGHT * 0.5f;
+
+        bool inDoorX = (player.pos.x > cx - doorHalfW && player.pos.x < cx + doorHalfW);
+        bool inDoorY = (player.pos.y > cy - doorHalfH && player.pos.y < cy + doorHalfH);
+
+        // Allow walking through open doorways (extend bounds to room edge)
+        if (room->connections[DIR_NORTH] >= 0 && !room->doorsLocked &&
+            !(room->doorLocked[DIR_NORTH]) && inDoorX) {
+            minY = ROOM_Y + player.radius;
+        }
+        if (room->connections[DIR_SOUTH] >= 0 && !room->doorsLocked &&
+            !(room->doorLocked[DIR_SOUTH]) && inDoorX) {
+            maxY = ROOM_Y + ROOM_HEIGHT - player.radius;
+        }
+        if (room->connections[DIR_WEST] >= 0 && !room->doorsLocked &&
+            !(room->doorLocked[DIR_WEST]) && inDoorY) {
+            minX = ROOM_X + player.radius;
+        }
+        if (room->connections[DIR_EAST] >= 0 && !room->doorsLocked &&
+            !(room->doorLocked[DIR_EAST]) && inDoorY) {
+            maxX = ROOM_X + ROOM_WIDTH - player.radius;
+        }
+
+        player.pos.x = Clamp(player.pos.x, minX, maxX);
+        player.pos.y = Clamp(player.pos.y, minY, maxY);
+    }
+
+    // Sword attack
+    if ((IsKeyPressed(KEY_SPACE) || IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) &&
+        player.hasSword && player.attackCooldown <= 0 && !player.isAttacking) {
+
         player.isAttacking = true;
-        player.attackTimer = 0.0f;
+        player.attackTimer = 0;
         player.attackCooldown = SWORD_ATTACK_COOLDOWN;
         player.swordAngle = -90.0f;
-        
-        ParticlesBurst(player.pos, 5, (Color){ 200, 200, 255, 200 }, 
-                      PTYPE_SPARK, 50.0f, 100.0f);
-        
-        // Check for enemy hits (only in current room)
-        bool hitEnemy = false;
-        for (int i = 0; i < MAX_ENEMIES; i++) {
-            Enemy *e = &enemies[i];
-            if (!e->active) continue;
-            if (e->roomX != roomSystem.currentRoomX || 
-                e->roomY != roomSystem.currentRoomY) continue;
-            
-            float dist = Vec2Distance(player.pos, e->pos);
-            if (dist < SWORD_ATTACK_RANGE) {
-                hitEnemy = true;
-                e->health -= SWORD_DAMAGE;
-                
-                Vector2 knockbackDir = Vec2Sub(e->pos, player.pos);
-                ApplyKnockback(&e->knockback, knockbackDir, 
-                              KNOCKBACK_STRENGTH * SWORD_KNOCKBACK_MULTIPLIER);
-                
-                ParticlesBurst(e->pos, 15, (Color){ 200, 50, 50, 255 }, 
-                              PTYPE_BLOOD, 80.0f, 150.0f);
-                
-                if (e->health <= 0.0f) {
-                    e->active = false;
-                    ParticlesBurst(e->pos, 30, (Color){ 200, 50, 50, 255 }, 
-                                  PTYPE_BLOOD, 100.0f, 250.0f);
-                }
+
+        float damage = SWORD_BASE_DAMAGE + player.inventory.damageBonus;
+
+        // Swing particles
+        for (int i = 0; i < 5; i++) {
+            float angle = ((float)GetRandomValue(0, 628)) / 100.0f;
+            float spd = 40.0f + (float)GetRandomValue(0, 60);
+            if (particles.count < MAX_PARTICLES) {
+                Particle *pt = &particles.pool[particles.count++];
+                pt->pos = player.pos;
+                pt->vel = (Vector2){ cosf(angle) * spd, sinf(angle) * spd };
+                pt->life = 0.2f;
+                pt->maxLife = 0.2f;
+                pt->size = 2.0f;
+                pt->color = (Color){ 200, 200, 255, 200 };
+                pt->type = PTYPE_SPARK;
             }
         }
-        
-        if (hitEnemy) {
+
+        // Hit enemies
+        bool hitAny = false;
+        for (int i = 0; i < MAX_ENEMIES; i++) {
+            Enemy *e = &enemies[i];
+            if (!e->active || e->roomId != dungeon.currentRoomId) continue;
+
+            float dist = Vec2Distance(player.pos, e->pos);
+            if (dist < SWORD_ATTACK_RANGE + e->radius) {
+                CombatApplyDamageToEnemy(e, damage, player.pos);
+                hitAny = true;
+            }
+        }
+
+        // Hit boss
+        if (boss.active && boss.phase != BOSS_DYING && boss.phase != BOSS_DEAD) {
+            float dist = Vec2Distance(player.pos, boss.pos);
+            if (dist < SWORD_ATTACK_RANGE + boss.radius) {
+                boss.health -= damage;
+                boss.flashTimer = 0.1f;
+                Vector2 kd = Vec2Sub(boss.pos, player.pos);
+                ApplyKnockback(&boss.knockback, kd, KNOCKBACK_STRENGTH * 0.5f);
+                ShakeScreen(6.0f, 0.2f, 45.0f);
+                hitFreezeTimer = 0.04f;
+                hitAny = true;
+
+                for (int i = 0; i < 12; i++) {
+                    float ang = ((float)GetRandomValue(0, 628)) / 100.0f;
+                    float spd = 70.0f + (float)GetRandomValue(0, 120);
+                    if (particles.count < MAX_PARTICLES) {
+                        Particle *pt = &particles.pool[particles.count++];
+                        pt->pos = boss.pos;
+                        pt->vel = (Vector2){ cosf(ang) * spd, sinf(ang) * spd };
+                        pt->life = 0.4f;
+                        pt->maxLife = 0.4f;
+                        pt->size = 3.0f;
+                        pt->color = (Color){ 200, 195, 180, 255 };
+                        pt->type = PTYPE_BLOOD;
+                    }
+                }
+                SetSoundVolume(hitSound, sfxVolume);
+                PlaySound(hitSound);
+            }
+        }
+
+        if (hitAny && !boss.active) {
+            SetSoundVolume(hitSound, sfxVolume);
             PlaySound(hitSound);
         }
     }
-    
-    // Handle sword pickup (only in current room)
-    if (!player.hasSword && sword.active) {
-        if (sword.roomX == roomSystem.currentRoomX && 
-            sword.roomY == roomSystem.currentRoomY) {
-            if (Vec2Distance(player.pos, sword.pos) < SWORD_PICKUP_RADIUS) {
-                player.hasSword = true;
-                sword.active = false;
-                sword.respawnTimer = 0.0f;
-                ParticlesBurst(sword.pos, 20, (Color){ 255, 220, 100, 255 }, 
-                              PTYPE_SPARK, 100.0f, 200.0f);
+
+    // Sword pickup
+    if (!player.hasSword && sword.active && sword.roomId == dungeon.currentRoomId) {
+        if (Vec2Distance(player.pos, sword.pos) < SWORD_PICKUP_RADIUS) {
+            player.hasSword = true;
+            sword.active = false;
+            for (int i = 0; i < 15; i++) {
+                float angle = ((float)GetRandomValue(0, 628)) / 100.0f;
+                float spd = 60.0f + (float)GetRandomValue(0, 100);
+                if (particles.count < MAX_PARTICLES) {
+                    Particle *pt = &particles.pool[particles.count++];
+                    pt->pos = sword.pos;
+                    pt->vel = (Vector2){ cosf(angle) * spd, sinf(angle) * spd };
+                    pt->life = 0.4f;
+                    pt->maxLife = 0.4f;
+                    pt->size = 3.0f;
+                    pt->color = (Color){ 255, 220, 100, 255 };
+                    pt->type = PTYPE_SPARK;
+                }
             }
         }
     }
-    
-    // Handle death
-    if (player.health <= 0.0f) {
-        PlayerRespawn();
+
+    // Death
+    if (player.health <= 0) {
+        // Don't respawn, trigger game over via game state
+        player.health = 0;
     }
 }
 
 void PlayerDraw(Texture2D spriteSheet) {
-    Vector2 roomOffset = GetRoomOffset(roomSystem.currentRoomX, 
-                                       roomSystem.currentRoomY);
-    
-    // Animation frames (from sprite sheet)
+    float px = player.pos.x;
+    float py = player.pos.y;
+
+    // Shadow (pixel rectangle)
+    DrawRectangle((int)(px - PLAYER_SIZE * 0.6f), (int)(py + PLAYER_SIZE * 0.55f),
+                 (int)(PLAYER_SIZE * 1.2f), 4, (Color){ 0, 0, 0, 50 });
+
+    // Shield effect (pixel square outline)
+    if (player.shieldTimer > 0) {
+        float pulse = sinf(gameTime * 6.0f) * 0.2f + 0.8f;
+        int shSz = (int)(PLAYER_SIZE * 1.2f * pulse);
+        Color shC = { 80, 160, 255, (unsigned char)(100 * pulse) };
+        DrawRectangleLinesEx((Rectangle){ px - shSz, py - shSz, shSz * 2.0f, shSz * 2.0f }, 2, shC);
+    }
+
+    // Sprite
     Rectangle frames[4] = {
-        { 1.0f, 2.0f, 13.0f, 13.0f },
-        { 17.0f, 2.0f, 13.0f, 13.0f },
-        { 33.0f, 2.0f, 13.0f, 13.0f },
-        { 49.0f, 2.0f, 13.0f, 13.0f }
+        { 1, 2, 13, 13 }, { 17, 2, 13, 13 },
+        { 33, 2, 13, 13 }, { 49, 2, 13, 13 }
     };
-    
     int frameIdx = player.animFrame % 4;
     Rectangle src = frames[frameIdx];
-    
-    // Flip sprite for left-facing
-    if (player.facing == 2) {
-        src.width *= -1.0f;
-    }
-    
-    Rectangle dst = {
-        player.pos.x + roomOffset.x,
-        player.pos.y + roomOffset.y,
-        PLAYER_SIZE * 2.0f,
-        PLAYER_SIZE * 2.0f
-    };
+    if (player.facing == 2) src.width *= -1;
+
+    Rectangle dst = { px, py, PLAYER_SIZE * 2.0f, PLAYER_SIZE * 2.0f };
     Vector2 origin = { PLAYER_SIZE, PLAYER_SIZE };
-    
-    // Apply invulnerability flash effect
+
     Color tint = WHITE;
-    if (player.invulnTimer > 0.0f) {
+    if (player.flashTimer > 0) {
+        tint = WHITE;
+    } else if (player.invulnTimer > 0) {
         float alpha = sinf(gameTime * 30.0f) * 0.5f + 0.5f;
         tint = Fade(WHITE, alpha);
     }
-    
+
     DrawTexturePro(spriteSheet, src, dst, origin, 0.0f, tint);
-    
-    // Draw sword if equipped
+
+    // Sword rendering
     if (player.hasSword) {
-        float baseAngle = player.facing * 90.0f;
+        float baseAngle = (float)player.facing * 90.0f;
         float angle = baseAngle;
-        
-        if (player.isAttacking) {
-            angle = baseAngle + player.swordAngle;
-        }
-        
+        if (player.isAttacking) angle = baseAngle + player.swordAngle;
+
         Vector2 swordOffset = {
             cosf(angle * DEG2RAD) * (PLAYER_SIZE * 0.8f),
             sinf(angle * DEG2RAD) * (PLAYER_SIZE * 0.8f)
         };
         Vector2 swordPos = Vec2Add(player.pos, swordOffset);
-        swordPos.x += roomOffset.x;
-        swordPos.y += roomOffset.y;
-        
-        // Draw sword blade
-        Rectangle swordRect = { swordPos.x, swordPos.y, 8.0f, 35.0f };
-        Vector2 swordOrigin = { 4.0f, 0.0f };
-        DrawRectanglePro(swordRect, swordOrigin, angle, 
-                        (Color){ 180, 180, 200, 255 });
-        
-        // Draw sword highlight
+
+        // Sword trail when attacking
+        if (player.isAttacking) {
+            float trailAlpha = 1.0f - player.attackTimer / SWORD_SWING_DURATION;
+            DrawRectanglePro(
+                (Rectangle){ swordPos.x, swordPos.y, 10, 38 },
+                (Vector2){ 5, 0 }, angle,
+                Fade((Color){ 150, 180, 255, 100 }, trailAlpha * 0.5f)
+            );
+        }
+
+        // Blade
         DrawRectanglePro(
-            (Rectangle){ swordPos.x + 2.0f, swordPos.y, 2.0f, 35.0f },
-            swordOrigin,
-            angle,
+            (Rectangle){ swordPos.x, swordPos.y, 8, 35 },
+            (Vector2){ 4, 0 }, angle,
+            (Color){ 180, 180, 200, 255 }
+        );
+        // Highlight
+        DrawRectanglePro(
+            (Rectangle){ swordPos.x + 2, swordPos.y, 2, 35 },
+            (Vector2){ 4, 0 }, angle,
             Fade(WHITE, 0.6f)
+        );
+        // Guard
+        DrawRectanglePro(
+            (Rectangle){ swordPos.x, swordPos.y, 14, 4 },
+            (Vector2){ 7, -1 }, angle,
+            (Color){ 160, 140, 100, 255 }
         );
     }
 }
 
 /*
  * ============================================================================
- * ENEMY SYSTEM
+ * ENEMY SYSTEM — Multi-type AI
  * ============================================================================
  */
 
-void EnemyInit(Enemy *e, Vector2 pos, int index, int totalEnemies) {
-    e->pos = pos;
-    e->velocity = (Vector2){ 0.0f, 0.0f };
-    e->knockback = (Vector2){ 0.0f, 0.0f };
-    e->health = ENEMY_HEALTH;
-    e->maxHealth = ENEMY_HEALTH;
-    e->facing = 0;
-    e->active = true;
-    e->isAttacking = false;
-    e->attackTimer = 0.0f;
-    e->attackCooldown = 0.0f;
-    e->animTimer = 0.0f;
-    e->animFrame = 0;
-    e->targetPos = e->pos;
-    e->stateTimer = -((float)index * 0.5f);  // Stagger AI updates
-    e->radius = ENEMY_SIZE * 1.2f;
-    
-    // Initialize orbiting behavior
-    e->preferredAngle = (2.0f * PI / totalEnemies) * index;
-    e->circleRadius = ENEMY_PLAYER_MIN_DISTANCE + 10.0f;
+static void UpdateSlime(Enemy *e, float dt) {
+    e->hopTimer += dt;
+
+    // Hop toward player in bursts
+    float hopCycle = 1.3f;
+    float hopDuration = 0.4f;
+    float cyclePos = fmodf(e->hopTimer, hopCycle);
+
+    if (cyclePos < hopDuration) {
+        Vector2 toPlayer = Vec2Sub(player.pos, e->pos);
+        Vector2 dir = Vec2Normalize(toPlayer);
+        e->velocity = Vec2Scale(dir, SLIME_SPEED * 2.0f);
+
+        if (fabsf(dir.x) > fabsf(dir.y)) {
+            e->facing = dir.x > 0 ? 0 : 2;
+        } else {
+            e->facing = dir.y > 0 ? 1 : 3;
+        }
+    } else {
+        e->velocity = (Vector2){ 0, 0 };
+    }
+
+    // Attack
+    float dist = Vec2Distance(e->pos, player.pos);
+    if (dist < SLIME_ATTACK_RANGE && e->attackCooldown <= 0) {
+        CombatApplyDamageToPlayer(SLIME_DAMAGE, e->pos);
+        e->attackCooldown = SLIME_ATTACK_COOLDOWN;
+    }
 }
 
-void EnemyUpdate(Enemy *e, float dt) {
-    if (!e->active) return;
-    
-    // Only update enemies in current room
-    if (e->roomX != roomSystem.currentRoomX || 
-        e->roomY != roomSystem.currentRoomY) {
-        return;
-    }
-    
-    // Update timers
-    if (e->attackCooldown > 0.0f) e->attackCooldown -= dt;
+static void UpdateBat(Enemy *e, float dt) {
     e->stateTimer += dt;
-    
-    // Skip update during initial delay
-    if (e->stateTimer < 0.0f) return;
-    
-    // Calculate distance to player
+
+    // Sine-wave flight toward player
     Vector2 toPlayer = Vec2Sub(player.pos, e->pos);
-    float distToPlayer = Vec2Length(toPlayer);
-    
-    // Update orbit angle with slight variation
-    float orbitSpeed = 0.5f + sinf(e->stateTimer * 0.3f) * 0.2f;
-    e->preferredAngle += dt * orbitSpeed;
-    
-    // Calculate ideal orbital position
-    Vector2 idealPos = {
-        player.pos.x + cosf(e->preferredAngle) * e->circleRadius,
-        player.pos.y + sinf(e->preferredAngle) * e->circleRadius
-    };
-    
-    Vector2 toIdeal = Vec2Sub(idealPos, e->pos);
-    float distToIdeal = Vec2Length(toIdeal);
-    
-    // Move toward ideal position
-    if (distToIdeal > 5.0f) {
-        Vector2 dir = Vec2Normalize(toIdeal);
-        e->velocity = Vec2Scale(dir, ENEMY_SPEED);
-        
-        // Update facing direction
+    Vector2 dir = Vec2Normalize(toPlayer);
+
+    // Perpendicular oscillation
+    float sineVal = sinf(e->stateTimer * 4.0f + e->sineOffset) * 80.0f;
+    Vector2 perp = { -dir.y, dir.x };
+
+    e->velocity = Vec2Add(
+        Vec2Scale(dir, BAT_SPEED * 0.7f),
+        Vec2Scale(perp, sineVal)
+    );
+
+    if (fabsf(e->velocity.x) > fabsf(e->velocity.y)) {
+        e->facing = e->velocity.x > 0 ? 0 : 2;
+    } else {
+        e->facing = e->velocity.y > 0 ? 1 : 3;
+    }
+
+    // Wing flap animation
+    e->animTimer += dt;
+    if (e->animTimer >= 0.08f) {
+        e->animTimer -= 0.08f;
+        e->animFrame = (e->animFrame + 1) % 2;
+    }
+
+    // Attack
+    float dist = Vec2Distance(e->pos, player.pos);
+    if (dist < BAT_ATTACK_RANGE && e->attackCooldown <= 0) {
+        CombatApplyDamageToPlayer(BAT_DAMAGE, e->pos);
+        e->attackCooldown = BAT_ATTACK_COOLDOWN;
+    }
+}
+
+static void UpdateSkeleton(Enemy *e, float dt) {
+    float dist = Vec2Distance(e->pos, player.pos);
+
+    if (dist > SKELETON_ATTACK_RANGE * 0.5f) {
+        // Walk toward player
+        Vector2 dir = Vec2Normalize(Vec2Sub(player.pos, e->pos));
+        e->velocity = Vec2Scale(dir, SKELETON_SPEED);
+
         if (fabsf(dir.x) > fabsf(dir.y)) {
-            e->facing = dir.x > 0.0f ? 0 : 2;
+            e->facing = dir.x > 0 ? 0 : 2;
         } else {
-            e->facing = dir.y > 0.0f ? 1 : 3;
+            e->facing = dir.y > 0 ? 1 : 3;
         }
-        
-        // Update animation
+
         e->animTimer += dt;
         if (e->animTimer >= ANIM_SPEED) {
             e->animTimer -= ANIM_SPEED;
             e->animFrame = (e->animFrame + 1) % 4;
         }
     } else {
-        e->velocity = (Vector2){ 0.0f, 0.0f };
+        e->velocity = (Vector2){ 0, 0 };
         e->animFrame = 0;
     }
-    
-    // Apply knockback physics
-    e->pos = Vec2Add(e->pos, Vec2Scale(e->knockback, dt));
-    e->knockback = Vec2Scale(e->knockback, 1.0f - (KNOCKBACK_DECAY * dt));
-    
-    if (Vec2Length(e->knockback) < 10.0f) {
-        e->knockback = (Vector2){ 0.0f, 0.0f };
+
+    // Throw bone projectile
+    if (dist < SKELETON_ATTACK_RANGE && e->attackCooldown <= 0) {
+        Vector2 dir = Vec2Normalize(Vec2Sub(player.pos, e->pos));
+        Vector2 vel = Vec2Scale(dir, BONE_PROJECTILE_SPEED);
+        ProjectileSpawn(e->pos, vel, 5.0f, SKELETON_DAMAGE, false, e->roomId,
+                       (Color){ 200, 195, 180, 255 });
+        e->attackCooldown = SKELETON_ATTACK_COOLDOWN;
     }
-    
-    // Apply movement
-    e->pos = Vec2Add(e->pos, Vec2Scale(e->velocity, dt));
-    
-    // Enemy separation (only with enemies in same room)
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *other = &enemies[i];
-        if (other == e || !other->active) continue;
-        if (other->roomX != e->roomX || other->roomY != e->roomY) continue;
-        
-        float dist = Vec2Distance(e->pos, other->pos);
-        if (dist < ENEMY_SEPARATION_RADIUS && dist > 0.0f) {
-            Vector2 away = Vec2Sub(e->pos, other->pos);
-            Vector2 separation = Vec2Scale(Vec2Normalize(away), 
-                                          (ENEMY_SEPARATION_RADIUS - dist) * 0.5f);
-            e->pos = Vec2Add(e->pos, separation);
-        }
-    }
-    
-    // Attack player if in range
-    if (distToPlayer < ENEMY_ATTACK_RANGE) {
-        if (e->attackCooldown <= 0.0f && player.invulnTimer <= 0.0f) {
-            player.health -= ENEMY_DAMAGE;
-            e->attackCooldown = ENEMY_ATTACK_COOLDOWN;
-            
-            Vector2 knockbackDir = Vec2Sub(player.pos, e->pos);
-            ApplyKnockback(&player.knockback, knockbackDir, 
-                          KNOCKBACK_STRENGTH * PLAYER_KNOCKBACK_RESISTANCE);
-            
-            ParticlesBurst(player.pos, 10, (Color){ 200, 50, 50, 255 }, 
-                          PTYPE_BLOOD, 60.0f, 120.0f);
-        }
-    }
-    
-    // Keep enemy within room bounds
-    e->pos.x = Clamp(e->pos.x, ROOM_X + e->radius, 
-                     ROOM_X + ROOM_WIDTH - e->radius);
-    e->pos.y = Clamp(e->pos.y, ROOM_Y + e->radius, 
-                     ROOM_Y + ROOM_HEIGHT - e->radius);
 }
 
-void EnemyDraw(Enemy *e, Texture2D spriteSheet) {
-    if (!e->active) return;
-    
-    Vector2 roomOffset = GetRoomOffset(e->roomX, e->roomY);
-    
-    // Animation frames (from sprite sheet)
-    Rectangle frames[4] = {
-        { 1.0f, 2.0f, 13.0f, 13.0f },
-        { 17.0f, 2.0f, 13.0f, 13.0f },
-        { 33.0f, 2.0f, 13.0f, 13.0f },
-        { 49.0f, 2.0f, 13.0f, 13.0f }
-    };
-    
-    int frameIdx = e->animFrame % 4;
-    Rectangle src = frames[frameIdx];
-    
-    // Flip sprite for left-facing
-    if (e->facing == 2) {
-        src.width *= -1.0f;
+static void UpdateTurret(Enemy *e, float dt) {
+    (void)dt;
+    // Rotate to face player
+    Vector2 toPlayer = Vec2Sub(player.pos, e->pos);
+    e->aimAngle = atan2f(toPlayer.y, toPlayer.x);
+
+    // Fire
+    if (e->attackCooldown <= 0) {
+        Vector2 vel = Vec2Scale(Vec2Normalize(toPlayer), PROJECTILE_SPEED);
+        ProjectileSpawn(e->pos, vel, 5.0f, TURRET_DAMAGE, false, e->roomId,
+                       (Color){ 255, 100, 50, 255 });
+        e->attackCooldown = TURRET_ATTACK_COOLDOWN;
     }
-    
-    Rectangle dst = {
-        e->pos.x + roomOffset.x,
-        e->pos.y + roomOffset.y,
-        ENEMY_SIZE * 2.0f,
-        ENEMY_SIZE * 2.0f
+
+    e->velocity = (Vector2){ 0, 0 };
+}
+
+void EnemyUpdate(Enemy *e, float dt) {
+    if (!e->active) return;
+    if (e->roomId != dungeon.currentRoomId) return;
+
+    // Timers
+    if (e->attackCooldown > 0) e->attackCooldown -= dt;
+    if (e->flashTimer > 0) e->flashTimer -= dt;
+
+    // Skip during initial delay
+    if (e->stateTimer < 0) {
+        e->stateTimer += dt;
+        return;
+    }
+
+    // Type-specific AI
+    switch (e->type) {
+        case ENEMY_SLIME:    UpdateSlime(e, dt); break;
+        case ENEMY_BAT:      UpdateBat(e, dt); break;
+        case ENEMY_SKELETON: UpdateSkeleton(e, dt); break;
+        case ENEMY_TURRET:   UpdateTurret(e, dt); break;
+        default: break;
+    }
+
+    // Knockback
+    e->pos = Vec2Add(e->pos, Vec2Scale(e->knockback, dt));
+    e->knockback = Vec2Scale(e->knockback, 1.0f - KNOCKBACK_DECAY * dt);
+    if (Vec2Length(e->knockback) < 10.0f) e->knockback = (Vector2){ 0, 0 };
+
+    // Movement
+    e->pos = Vec2Add(e->pos, Vec2Scale(e->velocity, dt));
+
+    // Separation
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        Enemy *other = &enemies[i];
+        if (other == e || !other->active || other->roomId != e->roomId) continue;
+        float dist = Vec2Distance(e->pos, other->pos);
+        if (dist < ENEMY_SEPARATION_RADIUS && dist > 0) {
+            Vector2 away = Vec2Normalize(Vec2Sub(e->pos, other->pos));
+            e->pos = Vec2Add(e->pos, Vec2Scale(away, (ENEMY_SEPARATION_RADIUS - dist) * 0.4f));
+        }
+    }
+
+    // Bounds
+    float wt = WALL_THICKNESS * TILE_SIZE;
+    e->pos.x = Clamp(e->pos.x, ROOM_X + wt + e->radius, ROOM_X + ROOM_WIDTH - wt - e->radius);
+    e->pos.y = Clamp(e->pos.y, ROOM_Y + wt + e->radius, ROOM_Y + ROOM_HEIGHT - wt - e->radius);
+}
+
+/*
+ * ============================================================================
+ * ENEMY DRAWING — Programmatic 8-bit sprites
+ * ============================================================================
+ */
+
+static void DrawSlime(Enemy *e) {
+    // p = pixel block size, scaled so the slime fills its radius
+    float p = e->radius / 7.0f;
+
+    float squish = 1.0f;
+    float cyclePos = fmodf(e->hopTimer, 1.3f);
+    if (cyclePos < 0.4f) {
+        float t = cyclePos / 0.4f;
+        squish = 1.0f - sinf(t * PI) * 0.25f;
+    }
+
+    Color body = (e->flashTimer > 0) ? WHITE : (Color){ 60, 180, 60, 255 };
+    Color bodyDark = { (unsigned char)(body.r * 3/4), (unsigned char)(body.g * 3/4), (unsigned char)(body.b * 3/4), 255 };
+    Color bodyHi = { (unsigned char)((body.r + 255)/2), (unsigned char)((body.g + 255)/2), (unsigned char)((body.b + 255)/2), 255 };
+
+    float bx = e->pos.x;
+    float by = e->pos.y;
+    float hOff = (1.0f - squish) * 2.0f * p;
+
+    // Shadow
+    DrawRectangle((int)(bx - 4*p), (int)(by + 5*p), (int)(8*p), (int)p, (Color){ 0, 0, 0, 50 });
+
+    // Body blob: stacked rows (wider in middle)
+    DrawRectangle((int)(bx - 3*p), (int)(by + 3*p - hOff), (int)(6*p), (int)p, bodyDark);
+    DrawRectangle((int)(bx - 5*p), (int)(by + 1*p - hOff), (int)(10*p), (int)(2*p), body);
+    DrawRectangle((int)(bx - 6*p), (int)(by - 2*p - hOff), (int)(12*p), (int)(3*p), body);
+    DrawRectangle((int)(bx - 5*p), (int)(by - 4*p - hOff), (int)(10*p), (int)(2*p), body);
+    DrawRectangle((int)(bx - 3*p), (int)(by - 5*p - hOff), (int)(6*p), (int)p, body);
+
+    // Highlight on upper-left
+    DrawRectangle((int)(bx - 4*p), (int)(by - 3*p - hOff), (int)(2*p), (int)p, bodyHi);
+
+    // Belly stripe
+    DrawRectangle((int)(bx - 4*p), (int)(by - hOff), (int)(8*p), (int)p, bodyDark);
+
+    // Eyes (square pixels)
+    float eyeDir = (e->facing == 2) ? -1.0f : 1.0f;
+    DrawRectangle((int)(bx - 3*p + eyeDir*p), (int)(by - 4*p - hOff), (int)(2*p), (int)(2*p), WHITE);
+    DrawRectangle((int)(bx + 1*p + eyeDir*p), (int)(by - 4*p - hOff), (int)(2*p), (int)(2*p), WHITE);
+    DrawRectangle((int)(bx - 2*p + eyeDir*2*p), (int)(by - 3*p - hOff), (int)p, (int)p, (Color){ 20, 20, 20, 255 });
+    DrawRectangle((int)(bx + 2*p + eyeDir*2*p), (int)(by - 3*p - hOff), (int)p, (int)p, (Color){ 20, 20, 20, 255 });
+}
+
+static void DrawBat(Enemy *e) {
+    Color body = (e->flashTimer > 0) ? WHITE : (Color){ 80, 50, 100, 255 };
+
+    // Shadow
+    DrawEllipse((int)e->pos.x, (int)(e->pos.y + e->radius), 8, 3, (Color){ 0, 0, 0, 40 });
+
+    // Body
+    DrawCircle((int)e->pos.x, (int)e->pos.y, 8, body);
+
+    // Wings
+    float wingAngle = e->animFrame == 0 ? 20.0f : -15.0f;
+    float wy = e->pos.y + wingAngle * 0.1f;
+
+    // Left wing
+    Vector2 lw[3] = {
+        { e->pos.x - 6, e->pos.y },
+        { e->pos.x - 22, wy - 8 },
+        { e->pos.x - 12, e->pos.y + 5 }
     };
-    Vector2 origin = { ENEMY_SIZE, ENEMY_SIZE };
-    
-    // Draw enemy with red tint
-    DrawTexturePro(spriteSheet, src, dst, origin, 0.0f, 
-                  (Color){ 255, 100, 100, 255 });
-    
-    // Draw health bar
-    float healthRatio = e->health / e->maxHealth;
-    float barWidth = 50.0f;
-    float barHeight = 6.0f;
-    Vector2 barPos = { 
-        e->pos.x + roomOffset.x - barWidth * 0.5f, 
-        e->pos.y + roomOffset.y - ENEMY_SIZE - 15.0f 
+    DrawTriangle(lw[0], lw[2], lw[1], body);
+
+    // Right wing
+    Vector2 rw[3] = {
+        { e->pos.x + 6, e->pos.y },
+        { e->pos.x + 22, wy - 8 },
+        { e->pos.x + 12, e->pos.y + 5 }
     };
-    
-    DrawRectangle((int)barPos.x, (int)barPos.y, (int)barWidth, (int)barHeight, 
-                 (Color){ 50, 50, 50, 200 });
-    DrawRectangle((int)barPos.x, (int)barPos.y, (int)(barWidth * healthRatio), 
-                 (int)barHeight, (Color){ 200, 50, 50, 255 });
+    DrawTriangle(rw[0], rw[1], rw[2], body);
+
+    // Eyes
+    DrawCircle((int)(e->pos.x - 3), (int)(e->pos.y - 2), 2, (Color){ 255, 50, 50, 255 });
+    DrawCircle((int)(e->pos.x + 3), (int)(e->pos.y - 2), 2, (Color){ 255, 50, 50, 255 });
+}
+
+static void DrawSkeleton(Enemy *e) {
+    Color bone = (e->flashTimer > 0) ? WHITE : (Color){ 200, 195, 180, 255 };
+    Color boneDark = { bone.r * 3/4, bone.g * 3/4, bone.b * 3/4, 255 };
+
+    float bx = e->pos.x;
+    float by = e->pos.y;
+    float s = SKELETON_SIZE / 30.0f; // Scale factor relative to original size
+
+    // Shadow (pixel rectangle)
+    DrawRectangle((int)(bx - 10*s), (int)(by + 18*s), (int)(20*s), (int)(4*s), (Color){ 0, 0, 0, 50 });
+
+    // Legs
+    float walkOffset = sinf(e->animFrame * PI * 0.5f) * 4.0f * s;
+    DrawRectangle((int)(bx - 5*s), (int)(by + 5*s), (int)(4*s), (int)(14*s + walkOffset), boneDark);
+    DrawRectangle((int)(bx + 2*s), (int)(by + 5*s), (int)(4*s), (int)(14*s - walkOffset), boneDark);
+
+    // Torso
+    DrawRectangle((int)(bx - 8*s), (int)(by - 10*s), (int)(16*s), (int)(18*s), bone);
+
+    // Ribs
+    for (int i = 0; i < 3; i++) {
+        DrawRectangle((int)(bx - 6*s), (int)(by - 6*s + i * 5*s), (int)(12*s), (int)(2*s), boneDark);
+    }
+
+    // Head (square pixel skull)
+    DrawRectangle((int)(bx - 7*s), (int)(by - 26*s), (int)(14*s), (int)(14*s), bone);
+    // Top highlight
+    DrawRectangle((int)(bx - 7*s), (int)(by - 26*s), (int)(14*s), (int)(2*s),
+                 (Color){ (unsigned char)(bone.r + 20 > 255 ? 255 : bone.r + 20),
+                          (unsigned char)(bone.g + 20 > 255 ? 255 : bone.g + 20),
+                          (unsigned char)(bone.b + 20 > 255 ? 255 : bone.b + 20), 255 });
+    // Eye sockets
+    DrawRectangle((int)(bx - 5*s), (int)(by - 23*s), (int)(4*s), (int)(4*s), (Color){ 20, 20, 20, 255 });
+    DrawRectangle((int)(bx + 1*s), (int)(by - 23*s), (int)(4*s), (int)(4*s), (Color){ 20, 20, 20, 255 });
+    // Nose
+    DrawRectangle((int)(bx - 1*s), (int)(by - 18*s), (int)(2*s), (int)(2*s), boneDark);
+    // Jaw (separate block with gap)
+    DrawRectangle((int)(bx - 6*s), (int)(by - 14*s), (int)(12*s), (int)(4*s), boneDark);
+    // Teeth
+    DrawRectangle((int)(bx - 4*s), (int)(by - 15*s), (int)(2*s), (int)(2*s), bone);
+    DrawRectangle((int)(bx - 1*s), (int)(by - 15*s), (int)(2*s), (int)(2*s), bone);
+    DrawRectangle((int)(bx + 2*s), (int)(by - 15*s), (int)(2*s), (int)(2*s), bone);
+
+    // Arms
+    float armSwing = sinf(e->stateTimer * 2.0f) * 4.0f * s;
+    DrawRectangle((int)(bx - 13*s), (int)(by - 8*s + armSwing), (int)(5*s), (int)(14*s), boneDark);
+    DrawRectangle((int)(bx + 8*s), (int)(by - 8*s - armSwing), (int)(5*s), (int)(14*s), boneDark);
+}
+
+static void DrawTurret(Enemy *e) {
+    Color base = (e->flashTimer > 0) ? WHITE : (Color){ 100, 90, 80, 255 };
+    Color barrel = (e->flashTimer > 0) ? WHITE : (Color){ 140, 130, 120, 255 };
+
+    // Shadow
+    DrawEllipse((int)e->pos.x, (int)(e->pos.y + 12), 14, 5, (Color){ 0, 0, 0, 50 });
+
+    // Base
+    DrawRectangle((int)(e->pos.x - 14), (int)(e->pos.y - 14), 28, 28, base);
+    DrawRectangle((int)(e->pos.x - 12), (int)(e->pos.y - 12), 24, 24,
+                 (Color){ base.r + 15, base.g + 15, base.b + 15, 255 });
+
+    // Barrel (rotated toward player)
+    float angle = e->aimAngle * RAD2DEG;
+    DrawRectanglePro(
+        (Rectangle){ e->pos.x, e->pos.y, 24, 6 },
+        (Vector2){ 0, 3 }, angle, barrel
+    );
+
+    // Center
+    DrawCircle((int)e->pos.x, (int)e->pos.y, 6, (Color){ 60, 50, 45, 255 });
+    DrawCircle((int)e->pos.x, (int)e->pos.y, 3, (Color){ 200, 50, 50, 255 });
+}
+
+void EnemyDraw(Enemy *e) {
+    if (!e->active) return;
+    if (e->roomId != dungeon.currentRoomId) return;
+
+    switch (e->type) {
+        case ENEMY_SLIME:    DrawSlime(e); break;
+        case ENEMY_BAT:      DrawBat(e); break;
+        case ENEMY_SKELETON: DrawSkeleton(e); break;
+        case ENEMY_TURRET:   DrawTurret(e); break;
+        default: break;
+    }
+
+    // Health bar (only show if damaged)
+    if (e->health < e->maxHealth) {
+        float barW = 40.0f;
+        float barH = 4.0f;
+        float barX = e->pos.x - barW / 2;
+        float barY = e->pos.y - e->radius - 12.0f;
+        float ratio = e->health / e->maxHealth;
+        if (ratio < 0) ratio = 0;
+
+        DrawRectangle((int)barX, (int)barY, (int)barW, (int)barH, (Color){ 30, 30, 30, 180 });
+        Color hpColor = ratio > 0.5f ? (Color){ 100, 220, 100, 255 }
+                       : ratio > 0.25f ? (Color){ 220, 180, 50, 255 }
+                       : (Color){ 220, 50, 50, 255 };
+        DrawRectangle((int)barX, (int)barY, (int)(barW * ratio), (int)barH, hpColor);
+    }
 }
 
 /*
@@ -536,59 +705,55 @@ void EnemyDraw(Enemy *e, Texture2D spriteSheet) {
  * ============================================================================
  */
 
-void SwordInit(void) {
-    swordSpawnPoint = (Vector2){ 
-        ROOM_X + ROOM_WIDTH * 0.3f, 
-        ROOM_Y + ROOM_HEIGHT * 0.3f 
-    };
-    
-    sword.pos = swordSpawnPoint;
+void SwordInit(int roomId) {
+    sword.pos = (Vector2){ ROOM_X + ROOM_WIDTH * 0.5f, ROOM_Y + ROOM_HEIGHT * 0.35f };
+    sword.roomId = roomId;
     sword.active = true;
-    sword.bobPhase = 0.0f;
-    sword.spinAngle = 0.0f;
-    sword.respawnTimer = 0.0f;
-    sword.roomX = roomSystem.currentRoomX;
-    sword.roomY = roomSystem.currentRoomY;
+    sword.bobPhase = 0;
+    sword.spinAngle = 0;
 }
 
 void SwordUpdate(float dt) {
-    if (sword.active) {
-        // Animate floating effect
-        sword.bobPhase += dt * 3.0f;
-        sword.spinAngle += dt * 90.0f;
-        if (sword.spinAngle >= 360.0f) sword.spinAngle -= 360.0f;
-    }
+    if (!sword.active) return;
+    sword.bobPhase += dt * 3.0f;
+    sword.spinAngle += dt * 90.0f;
+    if (sword.spinAngle >= 360.0f) sword.spinAngle -= 360.0f;
 }
 
 void SwordDraw(void) {
     if (!sword.active) return;
-    
-    Vector2 roomOffset = GetRoomOffset(sword.roomX, sword.roomY);
-    
-    // Calculate bobbing offset
-    float bobOffset = sinf(sword.bobPhase) * 8.0f;
-    Vector2 drawPos = { 
-        sword.pos.x + roomOffset.x, 
-        sword.pos.y + roomOffset.y + bobOffset 
-    };
-    
-    // Draw glow effect
-    DrawCircle((int)drawPos.x, (int)drawPos.y, 25.0f, 
-              Fade((Color){ 255, 220, 100, 100 }, 0.4f));
-    DrawCircle((int)drawPos.x, (int)drawPos.y, 15.0f, 
-              Fade((Color){ 255, 220, 100, 100 }, 0.6f));
-    
-    // Draw spinning sword
-    Rectangle swordRect = { drawPos.x, drawPos.y, 8.0f, 35.0f };
-    Vector2 origin = { 4.0f, 17.5f };
-    DrawRectanglePro(swordRect, origin, sword.spinAngle, 
-                    (Color){ 200, 200, 220, 255 });
-    
-    // Draw sword highlight
-    DrawRectanglePro(
-        (Rectangle){ drawPos.x + 2.0f, drawPos.y, 2.0f, 35.0f },
-        origin,
-        sword.spinAngle,
-        Fade(WHITE, 0.8f)
-    );
+    if (sword.roomId != dungeon.currentRoomId) return;
+
+    int p = 3; // Pixel size
+    float bobOffset = sinf(sword.bobPhase) * 6.0f;
+    float dx = sword.pos.x;
+    float dy = sword.pos.y + bobOffset;
+
+    // Pixelated glow (pulsing square)
+    float pulse = sinf(gameTime * 3.0f) * 0.3f + 0.7f;
+    int glowSz = (int)(20.0f * pulse);
+    DrawRectangle((int)(dx - glowSz), (int)(dy - glowSz), glowSz * 2, glowSz * 2,
+                 (Color){ 255, 220, 100, (unsigned char)(20 * pulse) });
+
+    // Shadow
+    DrawRectangle((int)(dx - 6), (int)(sword.pos.y + 12), 12, p, (Color){ 0, 0, 0, 40 });
+
+    // Pixel art sword (static, facing up)
+    Color blade = { 200, 200, 220, 255 };
+    Color bladeHi = { 230, 230, 245, 255 };
+    Color guard = { 160, 140, 100, 255 };
+    Color grip = { 100, 75, 55, 255 };
+    Color pommel = { 180, 160, 80, 255 };
+
+    // Blade
+    DrawRectangle((int)(dx - p), (int)(dy - 6*p), 2*p, 8*p, blade);
+    DrawRectangle((int)(dx),     (int)(dy - 6*p), p, 8*p, bladeHi); // highlight
+    // Tip
+    DrawRectangle((int)(dx - p/2), (int)(dy - 7*p), p, p, blade);
+    // Guard
+    DrawRectangle((int)(dx - 2*p), (int)(dy + 2*p), 4*p, p, guard);
+    // Grip
+    DrawRectangle((int)(dx - p/2), (int)(dy + 3*p), p, 2*p, grip);
+    // Pommel
+    DrawRectangle((int)(dx - p), (int)(dy + 5*p), 2*p, p, pommel);
 }
