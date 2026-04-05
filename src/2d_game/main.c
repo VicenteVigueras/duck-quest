@@ -1,8 +1,17 @@
 #include "raylib.h"
 #include "rlgl.h"
 #include "types.h"
+#include "utils.h"
 #include "entities.h"
 #include "systems.h"
+#include "dungeon.h"
+#include "renderer.h"
+#include "combat.h"
+#include "items.h"
+#include "boss.h"
+#include "minimap.h"
+#include <string.h>
+#include <time.h>
 
 /*
  * ============================================================================
@@ -14,20 +23,27 @@ Player player;
 Enemy enemies[MAX_ENEMIES];
 Sword sword;
 ParticleSystem particles;
-RoomSystem roomSystem;
+Dungeon dungeon;
+Projectile projectiles[MAX_PROJECTILES];
+WorldItem worldItems[MAX_WORLD_ITEMS];
+Boss boss;
+ScreenShake screenShake;
+GameStateManager gameState;
 
 float gameTime;
+float hitFreezeTimer;
 Vector2 playerSpawnPoint;
-Vector2 swordSpawnPoint;
+
+float musicVolume = 0.5f;
+float sfxVolume = 0.7f;
+float screenOffsetX = 0.0f;
+float screenOffsetY = 0.0f;
 
 Sound hitSound;
 Music backgroundMusic;
-
-int currentWave;
-int enemiesInWave;
-bool waveComplete;
-float waveTransitionTimer;
-
+Music titleMusic;
+Music gameplayMusic;
+float musicFadeTimer;
 
 /*
  * ============================================================================
@@ -35,17 +51,13 @@ float waveTransitionTimer;
  * ============================================================================
  */
 
-// Realistic hit playback with slight randomness (safe + non-breaking)
-static void PlayHitSound(Sound sound)
-{
-    float pitch = (float)GetRandomValue(92,108) / 100.0f;
-    float volume = (float)GetRandomValue(85,100) / 100.0f;
-
+static void PlayHitSound(Sound sound) {
+    float pitch = (float)GetRandomValue(92, 108) / 100.0f;
+    float volume = (float)GetRandomValue(85, 100) / 100.0f;
     SetSoundPitch(sound, pitch);
     SetSoundVolume(sound, volume);
     PlaySound(sound);
 }
-
 
 /*
  * ============================================================================
@@ -54,17 +66,60 @@ static void PlayHitSound(Sound sound)
  */
 
 static void GameInit(void) {
-    PlayerInit();
-    SwordInit();
-    RoomSystemInit();
-    
+    // Clear all state
+    memset(enemies, 0, sizeof(enemies));
+    memset(projectiles, 0, sizeof(projectiles));
+    memset(&boss, 0, sizeof(boss));
+    memset(&screenShake, 0, sizeof(screenShake));
     particles.count = 0;
-    
-    currentWave = 0;
-    waveComplete = false;
-    waveTransitionTimer = 0.0f;
-    
-    StartWave(1);
+    hitFreezeTimer = 0;
+
+    // Generate dungeon
+    unsigned int seed = (unsigned int)time(NULL);
+    DungeonGenerate(&dungeon, seed);
+
+    // Init player
+    PlayerInit();
+
+    // Place sword in start room
+    SwordInit(dungeon.startRoomId);
+
+    // Init items
+    ItemsInit();
+
+    // Setup shop room
+    for (int i = 0; i < dungeon.roomCount; i++) {
+        if (dungeon.rooms[i].type == ROOM_SHOP) {
+            ShopRoomSetup(i);
+        }
+        if (dungeon.rooms[i].type == ROOM_TREASURE) {
+            // Place a guaranteed upgrade in treasure room
+            Vector2 pos = { ROOM_X + ROOM_WIDTH * 0.5f, ROOM_Y + ROOM_HEIGHT * 0.5f };
+            ItemType treasureItem;
+            int roll = GetRandomValue(0, 2);
+            if (roll == 0) treasureItem = ITEM_HEART_CONTAINER;
+            else if (roll == 1) treasureItem = ITEM_DAMAGE_UP;
+            else treasureItem = ITEM_SPEED_UP;
+            ItemSpawn(treasureItem, pos, i, 0);
+        }
+    }
+
+    // Place a key in one of the mid-distance combat rooms
+    for (int i = 1; i < dungeon.roomCount; i++) {
+        if (dungeon.rooms[i].type == ROOM_COMBAT && dungeon.rooms[i].distance >= 2) {
+            // This room will drop a key when cleared (spawn key at center)
+            Vector2 pos = { ROOM_X + ROOM_WIDTH * 0.6f, ROOM_Y + ROOM_HEIGHT * 0.6f };
+            ItemSpawn(ITEM_KEY, pos, i, 0);
+            break;
+        }
+    }
+
+    // Reset room name flash tracking
+    ResetRoomNames();
+
+    // Game state
+    gameState.current = STATE_GAMEPLAY;
+    gameState.stateTimer = 0;
 }
 
 /*
@@ -74,141 +129,317 @@ static void GameInit(void) {
  */
 
 int main(void) {
-    // Initialize window
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "DUCK QUEST");
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "DUCK QUEST — Into the Dungeon");
     SetTargetFPS(144);
-    
-    // Initialize audio
+
     InitAudioDevice();
-    
-    // Load assets
-    Texture2D playerSheet = LoadTexture("/Users/vicentevigueras/Developer/game_poc/assets/sprites/player/player.png");
-    Texture2D enemySheet = LoadTexture("/Users/vicentevigueras/Developer/game_poc/assets/sprites/player/enemy.png");
-    hitSound = LoadSound("/Users/vicentevigueras/Developer/game_poc/assets/sounds/hit_sound.wav");
-    backgroundMusic = LoadMusicStream("/Users/vicentevigueras/Developer/game_poc/assets/sounds/pixel_drift.mp3");
-    
-    // Configure music
-    backgroundMusic.looping = true;
-    SetMusicVolume(backgroundMusic, 0.5f);
-    PlayMusicStream(backgroundMusic);
-    
-    // Initialize game state
-    GameInit();
+
+    // Load assets (use relative paths via working directory)
+    Texture2D playerSheet = LoadTexture("assets/sprites/player/player.png");
+    Texture2D enemySheet = LoadTexture("assets/sprites/player/enemy.png");
+    hitSound = LoadSound("assets/sounds/hit_sound.wav");
+
+    // Load music tracks
+    titleMusic = LoadMusicStream("assets/sounds/pixel_drift.mp3");
+    titleMusic.looping = true;
+    gameplayMusic = LoadMusicStream("assets/sounds/castle.mp3");
+    gameplayMusic.looping = true;
+    musicFadeTimer = 0.0f;
+
+    backgroundMusic = titleMusic;
+    SetMusicVolume(titleMusic, musicVolume);
+    SetMusicVolume(gameplayMusic, 0.0f);
+    PlayMusicStream(titleMusic);
+
     gameTime = 0.0f;
-    
-    // Main game loop
+    gameState.current = STATE_TITLE;
+    gameState.stateTimer = 0;
+
+    (void)PlayHitSound; // Suppress unused warning; called via PlaySound directly
+    (void)enemySheet;   // Enemies now drawn programmatically
+
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
-        if (dt > 0.05f) dt = 0.05f;  // Cap delta time to prevent spiral of death
+        if (dt > 0.05f) dt = 0.05f;
         gameTime += dt;
-        
-        // Handle restart
-        if (IsKeyPressed(KEY_R)) {
-            GameInit();
+
+        // Compute centering offset for any window size
+        int winW = GetScreenWidth();
+        int winH = GetScreenHeight();
+        screenOffsetX = (winW - SCREEN_WIDTH) * 0.5f;
+        screenOffsetY = (winH - SCREEN_HEIGHT) * 0.5f;
+        if (screenOffsetX < 0) screenOffsetX = 0;
+        if (screenOffsetY < 0) screenOffsetY = 0;
+
+        UpdateMusicStream(titleMusic);
+        UpdateMusicStream(gameplayMusic);
+
+        // Crossfade between title and gameplay music
+        if (musicFadeTimer > 0.0f) {
+            musicFadeTimer -= dt;
+            if (musicFadeTimer < 0.0f) musicFadeTimer = 0.0f;
+            float fadeDuration = 1.5f;
+            float t = 1.0f - (musicFadeTimer / fadeDuration); // 0→1 over fade
+            if (t > 1.0f) t = 1.0f;
+            // Crossfade: title fades out, gameplay fades in
+            SetMusicVolume(titleMusic, musicVolume * (1.0f - t));
+            SetMusicVolume(gameplayMusic, musicVolume * t);
+            if (musicFadeTimer <= 0.0f) {
+                StopMusicStream(titleMusic);
+                SetMusicVolume(gameplayMusic, musicVolume);
+            }
         }
-        
-        // Update music
-        UpdateMusicStream(backgroundMusic);
-        
-        // Check wave completion
-        bool allDead = true;
-        for (int i = 0; i < MAX_ENEMIES; i++) {
-            if (enemies[i].active) {
-                allDead = false;
+
+        // Global volume controls (work in any state)
+        {
+            float volStep = 0.05f;
+            if (IsKeyPressed(KEY_EQUAL) || IsKeyPressedRepeat(KEY_EQUAL)) { // + key
+                musicVolume += volStep;
+                if (musicVolume > 1.0f) musicVolume = 1.0f;
+                SetMusicVolume(titleMusic, musicVolume);
+                SetMusicVolume(gameplayMusic, musicVolume);
+            }
+            if (IsKeyPressed(KEY_MINUS) || IsKeyPressedRepeat(KEY_MINUS)) { // - key
+                musicVolume -= volStep;
+                if (musicVolume < 0.0f) musicVolume = 0.0f;
+                SetMusicVolume(titleMusic, musicVolume);
+                SetMusicVolume(gameplayMusic, musicVolume);
+            }
+            if (IsKeyPressed(KEY_RIGHT_BRACKET) || IsKeyPressedRepeat(KEY_RIGHT_BRACKET)) { // ] for SFX+
+                sfxVolume += volStep;
+                if (sfxVolume > 1.0f) sfxVolume = 1.0f;
+            }
+            if (IsKeyPressed(KEY_LEFT_BRACKET) || IsKeyPressedRepeat(KEY_LEFT_BRACKET)) { // [ for SFX-
+                sfxVolume -= volStep;
+                if (sfxVolume < 0.0f) sfxVolume = 0.0f;
+            }
+        }
+
+        /*
+         * ====================================================================
+         * STATE MACHINE UPDATE
+         * ====================================================================
+         */
+
+        switch (gameState.current) {
+            case STATE_TITLE: {
+                if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
+                    GameInit();
+                    gameState.current = STATE_GAMEPLAY;
+                    // Crossfade from title to gameplay music
+                    SeekMusicStream(gameplayMusic, 0.0f);
+                    SetMusicVolume(gameplayMusic, 0.0f);
+                    PlayMusicStream(gameplayMusic);
+                    musicFadeTimer = 1.5f; // 1.5s crossfade
+                }
+                break;
+            }
+
+            case STATE_GAMEPLAY: {
+                // Hit freeze (skip updates for impact feel)
+                if (hitFreezeTimer > 0) {
+                    hitFreezeTimer -= dt;
+                    break;
+                }
+
+                // Pause
+                if (IsKeyPressed(KEY_ESCAPE)) {
+                    gameState.current = STATE_PAUSE;
+                    break;
+                }
+
+                // Restart
+                if (IsKeyPressed(KEY_R)) {
+                    GameInit();
+                    break;
+                }
+
+                // Update game systems
+                if (!dungeon.isTransitioning) {
+                    PlayerUpdate(dt);
+                    DungeonCheckDoorways();
+                }
+                DungeonUpdate(dt);
+
+                for (int i = 0; i < MAX_ENEMIES; i++) {
+                    if (enemies[i].active) {
+                        EnemyUpdate(&enemies[i], dt);
+                    }
+                }
+
+                BossUpdate(dt);
+                SwordUpdate(dt);
+                ProjectilesUpdate(dt);
+                ItemsUpdate(dt);
+                ParticlesUpdate(dt);
+                ScreenShakeUpdate(dt);
+
+                // Track rooms explored
+                DungeonRoom *curRoom = DungeonGetCurrentRoom();
+                if (curRoom->visited) {
+                    int explored = 0;
+                    for (int i = 0; i < dungeon.roomCount; i++) {
+                        if (dungeon.rooms[i].visited) explored++;
+                    }
+                    player.inventory.roomsExplored = explored;
+                }
+
+                // Check victory (boss dead and all rooms cleared, or boss dead)
+                if (boss.phase == BOSS_DEAD) {
+                    gameState.stateTimer += dt;
+                    if (gameState.stateTimer > 2.0f) {
+                        gameState.current = STATE_VICTORY;
+                        gameState.stateTimer = 0;
+                    }
+                }
+
+                // Check death
+                if (player.health <= 0) {
+                    gameState.stateTimer += dt;
+                    if (gameState.stateTimer > 1.0f) {
+                        gameState.current = STATE_GAME_OVER;
+                        gameState.stateTimer = 0;
+                    }
+                }
+
+                break;
+            }
+
+            case STATE_PAUSE: {
+                if (IsKeyPressed(KEY_ESCAPE)) {
+                    gameState.current = STATE_GAMEPLAY;
+                }
+                // Volume controlled by global +/-/[/] keys above
+                break;
+            }
+
+            case STATE_GAME_OVER:
+            case STATE_VICTORY: {
+                if (IsKeyPressed(KEY_R) || IsKeyPressed(KEY_ENTER)) {
+                    gameState.current = STATE_TITLE;
+                    gameState.stateTimer = 0;
+                    // Switch back to title music
+                    StopMusicStream(gameplayMusic);
+                    musicFadeTimer = 0.0f;
+                    SeekMusicStream(titleMusic, 0.0f);
+                    SetMusicVolume(titleMusic, musicVolume);
+                    PlayMusicStream(titleMusic);
+                }
                 break;
             }
         }
-        
-        if (allDead && !waveComplete) {
-            waveComplete = true;
-            waveTransitionTimer = 0.0f;
-        }
-        
-        // Auto-advance to next wave
-        if (waveComplete && currentWave < 10) {
-            waveTransitionTimer += dt;
-            if (waveTransitionTimer >= 3.0f) {
-                StartWave(currentWave + 1);
-            }
-        }
-        
-        // Update game systems
-        PlayerUpdate(dt);
-        CheckDoorwayCollision();
-        
-        for (int i = 0; i < MAX_ENEMIES; i++) {
-            if (enemies[i].active) {
-                EnemyUpdate(&enemies[i], dt);
-            }
-        }
-        
-        SwordUpdate(dt);
-        ParticlesUpdate(dt);
-        RoomSystemUpdate(dt);
-        
-        // Render
+
+        /*
+         * ====================================================================
+         * RENDER
+         * ====================================================================
+         */
+
         BeginDrawing();
-        ClearBackground((Color){ 20, 25, 35, 255 });
-        
-        // Apply camera offset for room transitions
-        Vector2 camOffset = GetCameraOffset();
-        
+        ClearBackground((Color){ 0, 0, 0, 255 }); // Black letterbox
+
+        // Center all content for any window size
         rlPushMatrix();
-        rlTranslatef(camOffset.x, camOffset.y, 0.0f);
-        
-        // Draw world
-        RoomSystemDraw();
-        SwordDraw();
-        ParticlesDraw();
-        
-        // Draw enemies with shadows
-        for (int i = 0; i < MAX_ENEMIES; i++) {
-            if (!enemies[i].active) continue;
-            
-            float roomOffsetX = enemies[i].roomX * ROOM_WIDTH;
-            float roomOffsetY = enemies[i].roomY * ROOM_HEIGHT;
-            
-            // Draw shadow
-            DrawCircle(
-                (int)(enemies[i].pos.x + roomOffsetX),
-                (int)(enemies[i].pos.y + roomOffsetY + 3),
-                ENEMY_SIZE * 0.8f,
-                Fade(BLACK, 0.3f)
-            );
-            
-            EnemyDraw(&enemies[i], enemySheet);
+        rlTranslatef(screenOffsetX, screenOffsetY, 0);
+
+        switch (gameState.current) {
+            case STATE_TITLE: {
+                TitleScreenDraw();
+                break;
+            }
+
+            case STATE_GAMEPLAY:
+            case STATE_PAUSE: {
+                // Dark background for game area
+                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, (Color){ 12, 10, 18, 255 });
+
+                // Screen shake offset
+                Vector2 shakeOffset = ScreenShakeGetOffset();
+                rlPushMatrix();
+                rlTranslatef(shakeOffset.x, shakeOffset.y, 0);
+
+                // Draw current room
+                DungeonRoom *room = DungeonGetCurrentRoom();
+                DrawRoomBackground(room, ROOM_X, ROOM_Y);
+                DrawRoomWalls(room, ROOM_X, ROOM_Y);
+                DrawRoomDoorways(room, ROOM_X, ROOM_Y);
+                DrawRoomDecorations(room, ROOM_X, ROOM_Y);
+                DrawTorches(room, ROOM_X, ROOM_Y);
+
+                // Draw world objects
+                SwordDraw();
+                ItemsDraw();
+                ProjectilesDraw();
+                ParticlesDraw();
+
+                // Draw enemies
+                for (int i = 0; i < MAX_ENEMIES; i++) {
+                    if (enemies[i].active) {
+                        EnemyDraw(&enemies[i]);
+                    }
+                }
+
+                // Draw boss
+                BossDraw();
+
+                // Draw player
+                PlayerDraw(playerSheet);
+
+                rlPopMatrix();
+
+                // HUD (not affected by shake)
+                HUDDraw();
+                DrawRoomNameFlash();
+
+                // Fade transition overlay
+                if (dungeon.fadeAlpha > 0.01f) {
+                    DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT,
+                                 (Color){ 0, 0, 0, (unsigned char)(dungeon.fadeAlpha * 255) });
+                }
+
+                // Pause overlay
+                if (gameState.current == STATE_PAUSE) {
+                    PauseScreenDraw();
+                }
+
+                break;
+            }
+
+            case STATE_GAME_OVER: {
+                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, (Color){ 12, 10, 18, 255 });
+                DungeonRoom *room = DungeonGetCurrentRoom();
+                DrawRoomBackground(room, ROOM_X, ROOM_Y);
+                DrawRoomWalls(room, ROOM_X, ROOM_Y);
+                GameOverScreenDraw();
+                break;
+            }
+
+            case STATE_VICTORY: {
+                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, (Color){ 12, 10, 18, 255 });
+                DungeonRoom *room = DungeonGetCurrentRoom();
+                DrawRoomBackground(room, ROOM_X, ROOM_Y);
+                DrawRoomWalls(room, ROOM_X, ROOM_Y);
+                VictoryScreenDraw();
+                break;
+            }
         }
-        
-        // Draw player with shadow
-        float playerRoomOffsetX = roomSystem.currentRoomX * ROOM_WIDTH;
-        float playerRoomOffsetY = roomSystem.currentRoomY * ROOM_HEIGHT;
-        
-        DrawCircle(
-            (int)(player.pos.x + playerRoomOffsetX),
-            (int)(player.pos.y + playerRoomOffsetY + 3),
-            PLAYER_SIZE * 0.8f,
-            Fade(BLACK, 0.3f)
-        );
-        
-        PlayerDraw(playerSheet);
-        
-        rlPopMatrix();
-        
-        // Draw UI (not affected by camera)
-        UIDraw();
-        
+
+        // Scanline overlay for 8-bit CRT feel
+        DrawScanlineOverlay();
+
+        rlPopMatrix(); // End centering offset
         EndDrawing();
     }
-    
+
     // Cleanup
-    UnloadMusicStream(backgroundMusic);
+    UnloadMusicStream(titleMusic);
+    UnloadMusicStream(gameplayMusic);
     UnloadSound(hitSound);
     UnloadTexture(playerSheet);
     UnloadTexture(enemySheet);
-    
+
     CloseAudioDevice();
     CloseWindow();
-    
     return 0;
 }
