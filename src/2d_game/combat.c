@@ -201,6 +201,18 @@ void CombatApplyDamageToEnemy(Enemy *e, float damage, Vector2 from) {
 
         // Drop items
         ItemDropFromEnemy(e->pos, e->roomId);
+
+        // Play slay sound on kill (sometimes)
+        if (GetRandomValue(0, 2) == 0) {
+            float pitch = (float)GetRandomValue(90, 110) / 100.0f;
+            SetSoundPitch(hitSoundSlay, pitch);
+            SetSoundVolume(hitSoundSlay, sfxVolume);
+            PlaySound(hitSoundSlay);
+        } else {
+            SetSoundVolume(hitSound, sfxVolume);
+            PlaySound(hitSound);
+        }
+        return;
     }
 
     SetSoundVolume(hitSound, sfxVolume);
@@ -209,6 +221,7 @@ void CombatApplyDamageToEnemy(Enemy *e, float damage, Vector2 from) {
 
 void CombatApplyDamageToPlayer(float damage, Vector2 from) {
     if (player.invulnTimer > 0.0f) return;
+    if (player.immunityTimer > 0.0f) return; // Rubber duck immunity
     if (player.shieldTimer > 0.0f) {
         player.shieldTimer -= 0.5f;
         ShakeScreen(1.0f, 0.06f, 35.0f);
