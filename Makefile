@@ -1,0 +1,64 @@
+# Compiler and flags
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c99 -O2
+
+# Raylib paths for macOS
+RAYLIB_INCLUDE = -I/opt/homebrew/include -I/usr/local/include
+RAYLIB_LIB = -L/opt/homebrew/lib -L/usr/local/lib
+
+# Link flags
+LDFLAGS = $(RAYLIB_LIB) -lraylib -lm \
+          -framework CoreVideo \
+          -framework IOKit \
+          -framework Cocoa \
+          -framework GLUT \
+          -framework OpenGL
+
+# Directories
+SRC_DIR   = src/2d_game
+BUILD_DIR = /Users/vicentevigueras/Developer/game_poc/build/2d_game
+
+# Target executable
+TARGET = $(BUILD_DIR)/2d_game_v_2
+
+# Object files
+OBJS = \
+	$(BUILD_DIR)/main.o \
+	$(BUILD_DIR)/entities.o \
+	$(BUILD_DIR)/systems.o
+
+# Default target
+all: $(TARGET)
+
+# Ensure build directory exists
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+# Link
+$(TARGET): $(BUILD_DIR) $(OBJS)
+	$(CC) $(OBJS) -o $(TARGET) $(LDFLAGS)
+	@echo "Build complete! Run with: $(TARGET)"
+
+# Compile rules
+$(BUILD_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/types.h $(SRC_DIR)/entities.h $(SRC_DIR)/systems.h
+	$(CC) $(CFLAGS) $(RAYLIB_INCLUDE) -c $< -o $@
+
+$(BUILD_DIR)/entities.o: $(SRC_DIR)/entities.c $(SRC_DIR)/entities.h $(SRC_DIR)/types.h $(SRC_DIR)/systems.h
+	$(CC) $(CFLAGS) $(RAYLIB_INCLUDE) -c $< -o $@
+
+$(BUILD_DIR)/systems.o: $(SRC_DIR)/systems.c $(SRC_DIR)/systems.h $(SRC_DIR)/types.h $(SRC_DIR)/entities.h
+	$(CC) $(CFLAGS) $(RAYLIB_INCLUDE) -c $< -o $@
+
+# Clean
+clean:
+	rm -rf $(BUILD_DIR)
+	@echo "Cleaned build artifacts"
+
+# Rebuild
+rebuild: clean all
+
+# Run
+run: all
+	$(TARGET)
+
+.PHONY: all clean rebuild run
