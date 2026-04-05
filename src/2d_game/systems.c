@@ -149,36 +149,84 @@ void HUDDraw(void) {
                 (Color){ 80, 160, 255, 200 });
     }
 
+    // Immunity timer
+    if (player.immunityTimer > 0) {
+        float imY = player.shieldTimer > 0 ? itemY + 38 : itemY + 22;
+        float cycle = gameTime * 6.0f;
+        Color imColor = {
+            (unsigned char)(sinf(cycle) * 80 + 175),
+            (unsigned char)(sinf(cycle + 2.094f) * 80 + 175),
+            (unsigned char)(sinf(cycle + 4.189f) * 80 + 175), 220
+        };
+        DrawText(TextFormat("STAR %.0f", player.immunityTimer),
+                (int)(HUD_PADDING), (int)(imY), 14, imColor);
+    }
+
     // Room objective
     DrawRoomObjective();
 
-    // Pause button indicator (top-right, below minimap area)
+    // ===== Bottom status bar panel (organized, padded, good contrast) =====
     {
-        int p = 3;
-        float pbx = SCREEN_WIDTH - 55;
-        float pby = SCREEN_HEIGHT - 72;
-        Color pbCol = { 160, 160, 170, 100 };
-        // Two pixel bars (pause icon)
-        DrawRectangle((int)pbx, (int)pby, 2*p, 4*p, pbCol);
-        DrawRectangle((int)(pbx + 3*p), (int)pby, 2*p, 4*p, pbCol);
-        DrawText("ESC", (int)(pbx - 2), (int)(pby + 4*p + 2), 10, (Color){ 130, 130, 140, 90 });
-    }
+        float panelW = 300.0f;
+        float panelH = 52.0f;
+        float panelX = SCREEN_WIDTH - panelW - 12.0f;
+        float panelY = SCREEN_HEIGHT - panelH - 8.0f;
 
-    // Volume hint
-    DrawText("+/- Music  [/] SFX", SCREEN_WIDTH - 160, SCREEN_HEIGHT - 50, 11,
-            (Color){ 100, 100, 110, 80 });
+        // Dark background panel with border for contrast
+        DrawRectangle((int)panelX, (int)panelY, (int)panelW, (int)panelH,
+                     (Color){ 12, 10, 18, 200 });
+        DrawRectangleLinesEx((Rectangle){ panelX, panelY, panelW, panelH },
+                            1, (Color){ 60, 56, 70, 180 });
+
+        float innerPad = 10.0f;
+        float cx = panelX + innerPad;
+        float cy = panelY + 8.0f;
+
+        // Row 1: Pause icon + "ESC Pause" | Music/SFX hint
+        int p = 2;
+        Color iconCol = { 200, 200, 210, 200 };
+        Color textCol = { 170, 170, 180, 180 };
+        Color labelCol = { 130, 130, 140, 150 };
+
+        // Pause icon (two bars)
+        DrawRectangle((int)cx, (int)(cy + 1), 2*p, 3*p, iconCol);
+        DrawRectangle((int)(cx + 3*p), (int)(cy + 1), 2*p, 3*p, iconCol);
+        DrawText("ESC Pause", (int)(cx + 6*p + 4), (int)(cy), 12, textCol);
+
+        // Volume controls hint (right side of row 1)
+        float volHintX = panelX + panelW - innerPad - 120;
+        DrawText("+/- Music", (int)volHintX, (int)(cy), 11, labelCol);
+
+        // Row 2: SFX hint + FPS
+        float row2Y = cy + 20.0f;
+        DrawText("[/] SFX", (int)volHintX, (int)(row2Y), 11, labelCol);
+
+        // Music volume indicator
+        {
+            float barX = cx;
+            float barW = 80.0f;
+            float barH = 6.0f;
+            DrawText("Vol", (int)barX, (int)(row2Y), 11, labelCol);
+            float bx2 = barX + 24;
+            DrawRectangle((int)bx2, (int)(row2Y + 2), (int)barW, (int)barH,
+                         (Color){ 30, 28, 40, 200 });
+            DrawRectangle((int)bx2, (int)(row2Y + 2), (int)(barW * musicVolume), (int)barH,
+                         (Color){ 100, 180, 220, 200 });
+        }
+
+        // FPS (right-aligned in panel)
+        int fps = GetFPS();
+        Color fpsColor = fps >= 120 ? (Color){ 100, 255, 100, 255 }
+                       : fps >= 60  ? (Color){ 255, 220, 100, 255 }
+                       : (Color){ 255, 100, 100, 255 };
+        const char *fpsText = TextFormat("%d FPS", fps);
+        int fpsW = MeasureText(fpsText, 12);
+        DrawText(fpsText, (int)(panelX + panelW - innerPad - fpsW), (int)(row2Y), 12,
+                Fade(fpsColor, 0.6f));
+    }
 
     // Minimap
     MinimapDraw();
-
-    // FPS
-    int fps = GetFPS();
-    Color fpsColor = fps >= 120 ? (Color){ 100, 255, 100, 255 }
-                   : fps >= 60  ? (Color){ 255, 220, 100, 255 }
-                   : (Color){ 255, 100, 100, 255 };
-    const char *fpsText = TextFormat("%d FPS", fps);
-    int fpsW = MeasureText(fpsText, 16);
-    DrawText(fpsText, SCREEN_WIDTH - fpsW - 20, SCREEN_HEIGHT - 30, 16, Fade(fpsColor, 0.5f));
 }
 
 /*
