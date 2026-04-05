@@ -692,6 +692,37 @@ void DrawItemIcon(ItemType type, float x, float y, float scale) {
             DrawCircle((int)(x + 3*scale), (int)y, scale * (0.5f + spark), (Color){255, 200, 50, (unsigned char)(200*spark)});
             break;
         }
+        case ITEM_RUBBER_DUCK: {
+            // Small red rubber duck (8-bit pixel art)
+            float s = scale;
+            Color duckBody = { 220, 50, 50, 255 };
+            Color duckBeak = { 255, 180, 50, 255 };
+            Color duckEye = { 20, 20, 20, 255 };
+            Color duckWing = { 180, 40, 40, 255 };
+            Color duckHi = { 255, 100, 100, 255 };
+            // Body (round blob)
+            DrawRectangle((int)(x + 1*s), (int)(y + 3*s), (int)(5*s), (int)(4*s), duckBody);
+            DrawRectangle((int)(x + 0*s), (int)(y + 4*s), (int)(7*s), (int)(2*s), duckBody);
+            // Head
+            DrawRectangle((int)(x + 1*s), (int)(y + 1*s), (int)(3*s), (int)(3*s), duckBody);
+            // Highlight
+            DrawRectangle((int)(x + 1*s), (int)(y + 1*s), (int)(2*s), (int)s, duckHi);
+            // Beak (pointing right)
+            DrawRectangle((int)(x + 4*s), (int)(y + 2*s), (int)(2*s), (int)s, duckBeak);
+            // Eye
+            DrawRectangle((int)(x + 2*s), (int)(y + 2*s), (int)s, (int)s, duckEye);
+            // Wing
+            DrawRectangle((int)(x + 2*s), (int)(y + 4*s), (int)(3*s), (int)(2*s), duckWing);
+            // Tail
+            DrawRectangle((int)(x + 0*s), (int)(y + 3*s), (int)s, (int)(2*s), duckBody);
+            // Star sparkle (immunity indicator)
+            float sparkle = sinf(gameTime * 6.0f) * 0.5f + 0.5f;
+            DrawRectangle((int)(x + 3*s), (int)(y - 1*s), (int)s, (int)(3*s),
+                         (Color){ 255, 255, 100, (unsigned char)(200 * sparkle) });
+            DrawRectangle((int)(x + 2*s), (int)(y + 0*s), (int)(3*s), (int)s,
+                         (Color){ 255, 255, 100, (unsigned char)(200 * sparkle) });
+            break;
+        }
         default: break;
     }
 }
