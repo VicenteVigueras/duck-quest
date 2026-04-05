@@ -90,6 +90,16 @@
 #define TURRET_DAMAGE 12.0f
 #define TURRET_ATTACK_COOLDOWN 1.5f
 
+// Wizard
+#define WIZARD_SPEED 50.0f
+#define WIZARD_SIZE 32.0f
+#define WIZARD_HEALTH 45.0f
+#define WIZARD_DAMAGE 20.0f
+#define WIZARD_ATTACK_RANGE 250.0f
+#define WIZARD_CAST_TIME 1.2f
+#define WIZARD_ATTACK_COOLDOWN 3.0f
+#define WIZARD_SPELL_SPEED 180.0f
+
 /*
  * ============================================================================
  * SWORD / COMBAT CONSTANTS
@@ -189,7 +199,8 @@ typedef enum {
     ENEMY_SLIME,
     ENEMY_BAT,
     ENEMY_SKELETON,
-    ENEMY_TURRET
+    ENEMY_TURRET,
+    ENEMY_WIZARD
 } EnemyType;
 
 typedef enum {
@@ -201,7 +212,8 @@ typedef enum {
     ITEM_KEY,
     ITEM_COIN,
     ITEM_SHIELD,
-    ITEM_BOMB
+    ITEM_BOMB,
+    ITEM_RUBBER_DUCK
 } ItemType;
 
 typedef enum {
@@ -293,6 +305,7 @@ typedef struct {
     float invulnTimer;
     float flashTimer;          // White flash on damage
     float shieldTimer;         // Shield powerup
+    float immunityTimer;       // Rubber duck immunity (star mode)
 
     PlayerInventory inventory;
 } Player;
@@ -327,6 +340,10 @@ typedef struct {
     float hopTimer;            // For slime hop animation
     float sineOffset;          // For bat sine wave
     float aimAngle;            // For turret rotation
+    float wizardCastTimer;     // Wizard spell cast channel timer
+    bool wizardCasting;        // Wizard is channeling a spell
+    float wizardFloatPhase;    // Floating animation phase
+    float wizardMouthTimer;    // Mouth animation for expressions
 } Enemy;
 
 typedef struct {
@@ -496,9 +513,13 @@ extern float screenOffsetX;    // For centering in fullscreen
 extern float screenOffsetY;
 
 extern Sound hitSound;
+extern Sound hitSoundSlay;
 extern Music backgroundMusic;
 extern Music titleMusic;
 extern Music gameplayMusic;
+extern Music bossMusic;
 extern float musicFadeTimer;   // Crossfade timer (>0 = fading)
+extern bool bossRoomActive;    // Currently in boss room with music playing
+extern float bossMusicFadeTimer; // Crossfade into boss music
 
 #endif // TYPES_H
