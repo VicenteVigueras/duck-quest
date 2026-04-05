@@ -40,10 +40,14 @@ float screenOffsetX = 0.0f;
 float screenOffsetY = 0.0f;
 
 Sound hitSound;
+Sound hitSoundSlay;
 Music backgroundMusic;
 Music titleMusic;
 Music gameplayMusic;
+Music bossMusic;
 float musicFadeTimer;
+bool bossRoomActive = false;
+float bossMusicFadeTimer = 0.0f;
 
 /*
  * ============================================================================
@@ -114,8 +118,24 @@ static void GameInit(void) {
         }
     }
 
+    // Place rubber ducks randomly in some rooms (~1 in 3 combat rooms gets one)
+    for (int i = 1; i < dungeon.roomCount; i++) {
+        if (dungeon.rooms[i].type == ROOM_COMBAT && GetRandomValue(0, 2) == 0) {
+            float duckX = ROOM_X + ROOM_WIDTH * (0.2f + (float)GetRandomValue(0, 60) / 100.0f);
+            float duckY = ROOM_Y + ROOM_HEIGHT * (0.2f + (float)GetRandomValue(0, 60) / 100.0f);
+            Vector2 duckPos = { duckX, duckY };
+            ItemSpawn(ITEM_RUBBER_DUCK, duckPos, i, 0);
+        }
+    }
+
     // Reset room name flash tracking
     ResetRoomNames();
+
+    // Reset boss music state
+    bossRoomActive = false;
+    bossMusicFadeTimer = 0.0f;
+    StopMusicStream(bossMusic);
+    SetMusicVolume(gameplayMusic, musicVolume);
 
     // Game state
     gameState.current = STATE_GAMEPLAY;
@@ -138,19 +158,28 @@ int main(void) {
     // Load assets (use relative paths via working directory)
     Texture2D playerSheet = LoadTexture("assets/sprites/player/player.png");
     Texture2D enemySheet = LoadTexture("assets/sprites/player/enemy.png");
-    hitSound = LoadSound("assets/sounds/hit_sound.wav");
+    hitSound = LoadSound("assets/sounds/hit_sound.mp3");
+    hitSoundSlay = LoadSound("assets/sounds/hit_sound_slay.mp3");
 
     // Load music tracks
     titleMusic = LoadMusicStream("assets/sounds/pixel_drift.mp3");
     titleMusic.looping = true;
     gameplayMusic = LoadMusicStream("assets/sounds/castle.mp3");
     gameplayMusic.looping = true;
+    bossMusic = LoadMusicStream("assets/sounds/boss_lair.mp3");
+    bossMusic.looping = true;
     musicFadeTimer = 0.0f;
+    bossMusicFadeTimer = 0.0f;
+    bossRoomActive = false;
 
     backgroundMusic = titleMusic;
     SetMusicVolume(titleMusic, musicVolume);
     SetMusicVolume(gameplayMusic, 0.0f);
+    SetMusicVolume(bossMusic, 0.0f);
     PlayMusicStream(titleMusic);
+
+    // Disable ESC as exit key (we use ESC for pause)
+    SetExitKey(0);
 
     gameTime = 0.0f;
     gameState.current = STATE_TITLE;
@@ -174,6 +203,7 @@ int main(void) {
 
         UpdateMusicStream(titleMusic);
         UpdateMusicStream(gameplayMusic);
+        UpdateMusicStream(bossMusic);
 
         // Crossfade between title and gameplay music
         if (musicFadeTimer > 0.0f) {
@@ -188,6 +218,42 @@ int main(void) {
             if (musicFadeTimer <= 0.0f) {
                 StopMusicStream(titleMusic);
                 SetMusicVolume(gameplayMusic, musicVolume);
+            }
+        }
+
+        // Boss music crossfade (gameplay <-> boss)
+        if (bossMusicFadeTimer > 0.0f) {
+            bossMusicFadeTimer -= dt;
+            if (bossMusicFadeTimer < 0.0f) bossMusicFadeTimer = 0.0f;
+            float fadeDuration = 2.0f;
+            float t = 1.0f - (bossMusicFadeTimer / fadeDuration);
+            if (t > 1.0f) t = 1.0f;
+            if (bossRoomActive) {
+                // Fade gameplay out, boss in
+                SetMusicVolume(gameplayMusic, musicVolume * (1.0f - t));
+                SetMusicVolume(bossMusic, musicVolume * t);
+            } else {
+                // Fade boss out, gameplay in
+                SetMusicVolume(bossMusic, musicVolume * (1.0f - t));
+                SetMusicVolume(gameplayMusic, musicVolume * t);
+                if (bossMusicFadeTimer <= 0.0f) {
+                    StopMusicStream(bossMusic);
+                }
+            }
+        }
+
+        // Check if we need to transition to/from boss music
+        if (gameState.current == STATE_GAMEPLAY && musicFadeTimer <= 0.0f) {
+            DungeonRoom *musicRoom = DungeonGetCurrentRoom();
+            bool inBossRoom = (musicRoom->type == ROOM_BOSS && !dungeon.isTransitioning);
+            if (inBossRoom && !bossRoomActive) {
+                bossRoomActive = true;
+                PlayMusicStream(bossMusic);
+                SetMusicVolume(bossMusic, 0.0f);
+                bossMusicFadeTimer = 2.0f;
+            } else if (!inBossRoom && bossRoomActive) {
+                bossRoomActive = false;
+                bossMusicFadeTimer = 2.0f;
             }
         }
 
@@ -232,6 +298,9 @@ int main(void) {
                     SetMusicVolume(gameplayMusic, 0.0f);
                     PlayMusicStream(gameplayMusic);
                     musicFadeTimer = 1.5f; // 1.5s crossfade
+                    // Reset boss music state
+                    bossRoomActive = false;
+                    bossMusicFadeTimer = 0.0f;
                 }
                 break;
             }
@@ -252,6 +321,35 @@ int main(void) {
                 // Restart
                 if (IsKeyPressed(KEY_R)) {
                     GameInit();
+                    break;
+                }
+
+                // DEBUG: Teleport to boss room
+                if (IsKeyPressed(KEY_P)) {
+                    int bossId = dungeon.bossRoomId;
+                    // Unlock all boss doors so we can enter
+                    for (int d = 0; d < 4; d++) {
+                        dungeon.rooms[bossId].doorLocked[d] = false;
+                        int nid = dungeon.rooms[bossId].connections[d];
+                        if (nid >= 0) {
+                            for (int d2 = 0; d2 < 4; d2++) {
+                                if (dungeon.rooms[nid].connections[d2] == bossId) {
+                                    dungeon.rooms[nid].doorLocked[d2] = false;
+                                }
+                            }
+                        }
+                    }
+                    // Give player a key and sword just in case
+                    player.hasSword = true;
+                    player.inventory.keys++;
+                    // Move to boss room
+                    dungeon.currentRoomId = bossId;
+                    dungeon.rooms[bossId].visited = true;
+                    player.pos = (Vector2){ ROOM_X + ROOM_WIDTH * 0.5f, ROOM_Y + ROOM_HEIGHT * 0.7f };
+                    // Init boss if not already
+                    if (!boss.active && boss.phase != BOSS_DEAD) {
+                        BossInit(bossId);
+                    }
                     break;
                 }
 
@@ -321,6 +419,9 @@ int main(void) {
                     gameState.stateTimer = 0;
                     // Switch back to title music
                     StopMusicStream(gameplayMusic);
+                    StopMusicStream(bossMusic);
+                    bossRoomActive = false;
+                    bossMusicFadeTimer = 0.0f;
                     musicFadeTimer = 0.0f;
                     SeekMusicStream(titleMusic, 0.0f);
                     SetMusicVolume(titleMusic, musicVolume);
@@ -435,7 +536,9 @@ int main(void) {
     // Cleanup
     UnloadMusicStream(titleMusic);
     UnloadMusicStream(gameplayMusic);
+    UnloadMusicStream(bossMusic);
     UnloadSound(hitSound);
+    UnloadSound(hitSoundSlay);
     UnloadTexture(playerSheet);
     UnloadTexture(enemySheet);
 
