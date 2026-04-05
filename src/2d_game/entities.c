@@ -1,6 +1,7 @@
 #include "entities.h"
 #include "combat.h"
 #include "dungeon.h"
+#include "items.h"
 #include "utils.h"
 #include <math.h>
 #include <string.h>
@@ -65,6 +66,7 @@ void PlayerUpdate(float dt) {
     if (player.invulnTimer > 0) player.invulnTimer -= dt;
     if (player.flashTimer > 0) player.flashTimer -= dt;
     if (player.shieldTimer > 0) player.shieldTimer -= dt;
+    if (player.immunityTimer > 0) player.immunityTimer -= dt;
 
     // Attack animation
     if (player.isAttacking) {
@@ -269,6 +271,32 @@ void PlayerDraw(Texture2D spriteSheet) {
     DrawRectangle((int)(px - PLAYER_SIZE * 0.6f), (int)(py + PLAYER_SIZE * 0.55f),
                  (int)(PLAYER_SIZE * 1.2f), 4, (Color){ 0, 0, 0, 50 });
 
+    // Immunity star overlay (rainbow cycling, like Mario star)
+    if (player.immunityTimer > 0) {
+        float cycle = gameTime * 8.0f;
+        // Cycling rainbow colors
+        unsigned char ir = (unsigned char)(sinf(cycle) * 127.0f + 128.0f);
+        unsigned char ig = (unsigned char)(sinf(cycle + 2.094f) * 127.0f + 128.0f);
+        unsigned char ib = (unsigned char)(sinf(cycle + 4.189f) * 127.0f + 128.0f);
+        float pulse = sinf(gameTime * 12.0f) * 0.3f + 0.7f;
+        int glowSz = (int)(PLAYER_SIZE * 1.5f * pulse);
+        // Outer glow
+        DrawCircle((int)px, (int)py, (float)glowSz,
+                  (Color){ ir, ig, ib, (unsigned char)(50 * pulse) });
+        // Inner glow ring
+        DrawCircleLines((int)px, (int)py, PLAYER_SIZE * 1.1f,
+                       (Color){ ir, ig, ib, (unsigned char)(180 * pulse) });
+        // Sparkle particles around player
+        for (int i = 0; i < 6; i++) {
+            float angle = gameTime * 4.0f + (float)i * PI / 3.0f;
+            float rad = PLAYER_SIZE * 1.3f + sinf(gameTime * 6.0f + (float)i) * 5.0f;
+            float sx = px + cosf(angle) * rad;
+            float sy = py + sinf(angle) * rad;
+            unsigned char sa = (unsigned char)(200 * pulse);
+            DrawRectangle((int)(sx - 2), (int)(sy - 2), 4, 4, (Color){ 255, 255, 200, sa });
+        }
+    }
+
     // Shield effect (pixel square outline)
     if (player.shieldTimer > 0) {
         float pulse = sinf(gameTime * 6.0f) * 0.2f + 0.8f;
@@ -290,7 +318,16 @@ void PlayerDraw(Texture2D spriteSheet) {
     Vector2 origin = { PLAYER_SIZE, PLAYER_SIZE };
 
     Color tint = WHITE;
-    if (player.flashTimer > 0) {
+    if (player.immunityTimer > 0) {
+        // Rainbow tint cycle for star immunity
+        float cycle = gameTime * 8.0f;
+        tint = (Color){
+            (unsigned char)(sinf(cycle) * 80.0f + 175.0f),
+            (unsigned char)(sinf(cycle + 2.094f) * 80.0f + 175.0f),
+            (unsigned char)(sinf(cycle + 4.189f) * 80.0f + 175.0f),
+            255
+        };
+    } else if (player.flashTimer > 0) {
         tint = WHITE;
     } else if (player.invulnTimer > 0) {
         float alpha = sinf(gameTime * 30.0f) * 0.5f + 0.5f;
@@ -466,6 +503,107 @@ static void UpdateTurret(Enemy *e, float dt) {
     e->velocity = (Vector2){ 0, 0 };
 }
 
+static void UpdateWizard(Enemy *e, float dt) {
+    e->wizardFloatPhase += dt;
+    e->wizardMouthTimer += dt;
+    float dist = Vec2Distance(e->pos, player.pos);
+
+    if (e->wizardCasting) {
+        // Channeling a spell — stand still, arms raised
+        e->wizardCastTimer -= dt;
+        e->velocity = (Vector2){ 0, 0 };
+
+        // Face the player while casting
+        Vector2 toP = Vec2Sub(player.pos, e->pos);
+        if (fabsf(toP.x) > fabsf(toP.y)) {
+            e->facing = toP.x > 0 ? 0 : 2;
+        } else {
+            e->facing = toP.y > 0 ? 1 : 3;
+        }
+
+        // Channel particles (gathering energy at staff tip)
+        if (particles.count < MAX_PARTICLES && GetRandomValue(0, 2) == 0) {
+            float ang = ((float)GetRandomValue(0, 628)) / 100.0f;
+            float rad = 20.0f + (float)GetRandomValue(0, 30);
+            Particle *pt = &particles.pool[particles.count++];
+            pt->pos = (Vector2){
+                e->pos.x + cosf(ang) * rad,
+                e->pos.y - e->radius * 0.5f + sinf(ang) * rad
+            };
+            // Converge toward wizard
+            pt->vel = Vec2Scale(Vec2Sub(e->pos, pt->pos), 3.0f);
+            pt->life = 0.3f;
+            pt->maxLife = 0.3f;
+            pt->size = 3.0f;
+            pt->color = (Color){ 180, 80, 255, 220 };
+            pt->type = PTYPE_SPARK;
+        }
+
+        if (e->wizardCastTimer <= 0.0f) {
+            // Fire spell projectile at player
+            Vector2 dir = Vec2Normalize(Vec2Sub(player.pos, e->pos));
+            Vector2 vel = Vec2Scale(dir, WIZARD_SPELL_SPEED);
+            ProjectileSpawn(e->pos, vel, 8.0f, WIZARD_DAMAGE, false, e->roomId,
+                           (Color){ 160, 60, 220, 255 });
+
+            // Cast burst particles (8-bit square sparks)
+            for (int i = 0; i < 8; i++) {
+                float ang = ((float)GetRandomValue(0, 628)) / 100.0f;
+                float spd = 40.0f + (float)GetRandomValue(0, 80);
+                if (particles.count < MAX_PARTICLES) {
+                    Particle *pt = &particles.pool[particles.count++];
+                    pt->pos = e->pos;
+                    pt->vel = (Vector2){ cosf(ang) * spd, sinf(ang) * spd };
+                    pt->life = 0.35f;
+                    pt->maxLife = 0.35f;
+                    pt->size = 3.0f;
+                    pt->color = (Color){ 220, 150, 255, 255 };
+                    pt->type = PTYPE_SPARK;
+                }
+            }
+
+            ShakeScreen(1.5f, 0.08f, 35.0f);
+            e->wizardCasting = false;
+            e->attackCooldown = WIZARD_ATTACK_COOLDOWN;
+        }
+        return;
+    }
+
+    // Float around — slow wander with sine-wave motion
+    Vector2 toPlayer = Vec2Sub(player.pos, e->pos);
+    Vector2 dir = Vec2Normalize(toPlayer);
+    float perpSine = sinf(e->wizardFloatPhase * 2.0f) * 60.0f;
+    Vector2 perp = { -dir.y, dir.x };
+
+    // Keep distance: if too close, back away; if far, approach
+    float desiredDist = WIZARD_ATTACK_RANGE * 0.6f;
+    float approachFactor = (dist > desiredDist) ? 1.0f : -0.5f;
+
+    e->velocity = Vec2Add(
+        Vec2Scale(dir, WIZARD_SPEED * approachFactor),
+        Vec2Scale(perp, perpSine)
+    );
+
+    if (fabsf(dir.x) > fabsf(dir.y)) {
+        e->facing = dir.x > 0 ? 0 : 2;
+    } else {
+        e->facing = dir.y > 0 ? 1 : 3;
+    }
+
+    // Walk animation
+    e->animTimer += dt;
+    if (e->animTimer >= ANIM_SPEED * 1.5f) {
+        e->animTimer -= ANIM_SPEED * 1.5f;
+        e->animFrame = (e->animFrame + 1) % 4;
+    }
+
+    // Start casting when in range
+    if (dist < WIZARD_ATTACK_RANGE && e->attackCooldown <= 0) {
+        e->wizardCasting = true;
+        e->wizardCastTimer = WIZARD_CAST_TIME;
+    }
+}
+
 void EnemyUpdate(Enemy *e, float dt) {
     if (!e->active) return;
     if (e->roomId != dungeon.currentRoomId) return;
@@ -486,6 +624,7 @@ void EnemyUpdate(Enemy *e, float dt) {
         case ENEMY_BAT:      UpdateBat(e, dt); break;
         case ENEMY_SKELETON: UpdateSkeleton(e, dt); break;
         case ENEMY_TURRET:   UpdateTurret(e, dt); break;
+        case ENEMY_WIZARD:   UpdateWizard(e, dt); break;
         default: break;
     }
 
@@ -670,6 +809,214 @@ static void DrawTurret(Enemy *e) {
     DrawCircle((int)e->pos.x, (int)e->pos.y, 3, (Color){ 200, 50, 50, 255 });
 }
 
+static void DrawWizard(Enemy *e) {
+    float p = e->radius / 8.0f;
+    float bx = e->pos.x;
+    float by = e->pos.y;
+
+    // Floating hover offset (bobbing up and down)
+    float floatOff = sinf(e->wizardFloatPhase * 3.0f) * 6.0f;
+    by += floatOff;
+
+    Color body = (e->flashTimer > 0) ? WHITE : (Color){ 100, 50, 160, 255 };
+    Color bodyDark = { (unsigned char)(body.r * 3/4), (unsigned char)(body.g * 3/4), (unsigned char)(body.b * 3/4), 255 };
+    Color bodyHi = { (unsigned char)((body.r + 255)/2), (unsigned char)((body.g + 255)/2), (unsigned char)((body.b + 255)/2), 255 };
+    Color robeColor = (e->flashTimer > 0) ? WHITE : (Color){ 60, 30, 100, 255 };
+    Color hatColor = (e->flashTimer > 0) ? WHITE : (Color){ 80, 40, 130, 255 };
+    Color starColor = { 255, 220, 100, 255 };
+    Color skinColor = (e->flashTimer > 0) ? WHITE : (Color){ 160, 130, 180, 255 };
+
+    // Shadow
+    DrawRectangle((int)(bx - 5*p), (int)(e->pos.y + 7*p), (int)(10*p), (int)(2*p), (Color){ 0, 0, 0, 50 });
+
+    // Casting: magic circle on ground (8-bit square ring)
+    if (e->wizardCasting) {
+        float progress = 1.0f - (e->wizardCastTimer / WIZARD_CAST_TIME);
+        float pulse = sinf(gameTime * 10.0f) * 0.3f + 0.7f;
+        unsigned char alpha = (unsigned char)(60.0f * progress * pulse);
+        // Square magic circle (pixel-art style, not round)
+        int ringSize = (int)(16*p * progress);
+        DrawRectangleLinesEx(
+            (Rectangle){ bx - ringSize, e->pos.y + 5*p - ringSize,
+                        ringSize * 2.0f, ringSize * 2.0f },
+            (int)(2*p), (Color){ 180, 80, 255, alpha });
+        // Corner runes (small squares at corners)
+        int rs = (int)(2*p);
+        DrawRectangle((int)(bx - ringSize), (int)(e->pos.y + 5*p - ringSize), rs, rs,
+                     (Color){ 220, 150, 255, alpha });
+        DrawRectangle((int)(bx + ringSize - rs), (int)(e->pos.y + 5*p - ringSize), rs, rs,
+                     (Color){ 220, 150, 255, alpha });
+        DrawRectangle((int)(bx - ringSize), (int)(e->pos.y + 5*p + ringSize - rs), rs, rs,
+                     (Color){ 220, 150, 255, alpha });
+        DrawRectangle((int)(bx + ringSize - rs), (int)(e->pos.y + 5*p + ringSize - rs), rs, rs,
+                     (Color){ 220, 150, 255, alpha });
+    }
+
+    // Robe (wide bottom — stacked pixel rows)
+    DrawRectangle((int)(bx - 5*p), (int)(by + 1*p), (int)(10*p), (int)(2*p), robeColor);
+    DrawRectangle((int)(bx - 6*p), (int)(by + 3*p), (int)(12*p), (int)(2*p), robeColor);
+    DrawRectangle((int)(bx - 7*p), (int)(by + 5*p), (int)(14*p), (int)(2*p), robeColor);
+    // Robe hem detail
+    DrawRectangle((int)(bx - 7*p), (int)(by + 6*p), (int)(14*p), (int)p, bodyDark);
+    // Robe belt/sash
+    DrawRectangle((int)(bx - 5*p), (int)(by + 0*p), (int)(10*p), (int)p,
+                 (Color){ 200, 160, 60, 255 });
+
+    // Body/torso
+    DrawRectangle((int)(bx - 4*p), (int)(by - 4*p), (int)(8*p), (int)(5*p), body);
+    DrawRectangle((int)(bx - 3*p), (int)(by - 3*p), (int)(2*p), (int)(2*p), bodyHi);
+
+    // Head (skin-colored, larger for expressive face)
+    DrawRectangle((int)(bx - 4*p), (int)(by - 9*p), (int)(8*p), (int)(6*p), skinColor);
+    // Head highlight
+    DrawRectangle((int)(bx - 4*p), (int)(by - 9*p), (int)(8*p), (int)p,
+                 (Color){ skinColor.r + 20 > 255 ? 255 : skinColor.r + 20,
+                          skinColor.g + 20 > 255 ? 255 : skinColor.g + 20,
+                          skinColor.b + 20 > 255 ? 255 : skinColor.b + 20, 255 });
+
+    // Pointy hat (wizard hat! all square pixels)
+    DrawRectangle((int)(bx - 5*p), (int)(by - 10*p), (int)(10*p), (int)(2*p), hatColor);
+    DrawRectangle((int)(bx - 4*p), (int)(by - 12*p), (int)(8*p), (int)(2*p), hatColor);
+    DrawRectangle((int)(bx - 3*p), (int)(by - 14*p), (int)(6*p), (int)(2*p), hatColor);
+    DrawRectangle((int)(bx - 2*p), (int)(by - 16*p), (int)(4*p), (int)(2*p), hatColor);
+    DrawRectangle((int)(bx - 1*p), (int)(by - 17*p), (int)(2*p), (int)(2*p), hatColor);
+    // Hat brim (wide, square)
+    DrawRectangle((int)(bx - 6*p), (int)(by - 10*p), (int)(12*p), (int)(2*p), hatColor);
+    // Hat band
+    DrawRectangle((int)(bx - 5*p), (int)(by - 10*p), (int)(10*p), (int)p,
+                 (Color){ 200, 160, 60, 255 });
+    // Star on hat (pulsing)
+    float starPulse = sinf(gameTime * 4.0f) * 0.3f + 0.7f;
+    DrawRectangle((int)(bx - p), (int)(by - 14*p), (int)(2*p), (int)p,
+                 (Color){ starColor.r, starColor.g, starColor.b, (unsigned char)(255 * starPulse) });
+    DrawRectangle((int)(bx - p/2), (int)(by - 15*p), (int)p, (int)(3*p),
+                 (Color){ starColor.r, starColor.g, starColor.b, (unsigned char)(255 * starPulse) });
+
+    // === EXPRESSIVE FACE ===
+    float eyeDir = (e->facing == 2) ? -1.0f : 1.0f;
+    bool casting = e->wizardCasting;
+
+    // Eyebrows (angry when casting, relaxed when idle)
+    Color browColor = { 60, 30, 80, 255 };
+    if (casting) {
+        // Angry V-shaped eyebrows
+        DrawRectangle((int)(bx - 3*p + eyeDir*p), (int)(by - 8*p), (int)(2*p), (int)p, browColor);
+        DrawRectangle((int)(bx - 2*p + eyeDir*p), (int)(by - 9*p), (int)p, (int)p, browColor);
+        DrawRectangle((int)(bx + 1*p + eyeDir*p), (int)(by - 8*p), (int)(2*p), (int)p, browColor);
+        DrawRectangle((int)(bx + 2*p + eyeDir*p), (int)(by - 9*p), (int)p, (int)p, browColor);
+    } else {
+        // Flat brows
+        DrawRectangle((int)(bx - 3*p + eyeDir*p), (int)(by - 9*p), (int)(2*p), (int)p, browColor);
+        DrawRectangle((int)(bx + 1*p + eyeDir*p), (int)(by - 9*p), (int)(2*p), (int)p, browColor);
+    }
+
+    // Eyes (big square pixels, squint when casting)
+    Color eyeWhite = { 240, 240, 250, 255 };
+    Color eyeColor = casting ? (Color){ 255, 80, 80, 255 } : (Color){ 180, 120, 255, 255 };
+    int eyeH = casting ? (int)p : (int)(2*p);
+    int eyeYoff = casting ? 0 : 0;
+    // Eye whites
+    DrawRectangle((int)(bx - 3*p + eyeDir*p), (int)(by - 8*p + eyeYoff), (int)(2*p), (int)(2*p), eyeWhite);
+    DrawRectangle((int)(bx + 1*p + eyeDir*p), (int)(by - 8*p + eyeYoff), (int)(2*p), (int)(2*p), eyeWhite);
+    // Irises (follow player direction, colored)
+    DrawRectangle((int)(bx - 2*p + eyeDir*2*p), (int)(by - 7*p + eyeYoff), (int)p, eyeH, eyeColor);
+    DrawRectangle((int)(bx + 2*p + eyeDir*2*p), (int)(by - 7*p + eyeYoff), (int)p, eyeH, eyeColor);
+    // Pupils (tiny dark squares)
+    if (!casting) {
+        DrawRectangle((int)(bx - 2*p + eyeDir*2*p), (int)(by - 7*p), (int)p, (int)p, (Color){ 20, 10, 30, 255 });
+        DrawRectangle((int)(bx + 2*p + eyeDir*2*p), (int)(by - 7*p), (int)p, (int)p, (Color){ 20, 10, 30, 255 });
+    }
+    // Eye glow when casting (pixel squares around eyes)
+    if (casting) {
+        float gp = sinf(gameTime * 8.0f) * 0.4f + 0.6f;
+        Color glow = { 200, 100, 255, (unsigned char)(80 * gp) };
+        DrawRectangle((int)(bx - 4*p + eyeDir*p), (int)(by - 9*p), (int)(4*p), (int)(4*p), glow);
+        DrawRectangle((int)(bx + 0*p + eyeDir*p), (int)(by - 9*p), (int)(4*p), (int)(4*p), glow);
+    }
+
+    // Nose (small pixel)
+    DrawRectangle((int)(bx + eyeDir*p), (int)(by - 5*p), (int)p, (int)p,
+                 (Color){ skinColor.r - 20, skinColor.g - 20, skinColor.b - 20, 255 });
+
+    // Mouth (changes expression!)
+    if (casting) {
+        // Open mouth — shouting incantation (flickers between shapes)
+        int mouthFrame = (int)(e->wizardMouthTimer * 6.0f) % 3;
+        if (mouthFrame == 0) {
+            // Wide O shape
+            DrawRectangle((int)(bx - 2*p), (int)(by - 4*p), (int)(4*p), (int)(2*p), (Color){ 40, 20, 30, 255 });
+            DrawRectangle((int)(bx - p), (int)(by - 4*p), (int)(2*p), (int)p, (Color){ 180, 60, 60, 255 });
+        } else if (mouthFrame == 1) {
+            // Teeth bared
+            DrawRectangle((int)(bx - 2*p), (int)(by - 4*p), (int)(4*p), (int)(2*p), (Color){ 40, 20, 30, 255 });
+            DrawRectangle((int)(bx - p), (int)(by - 4*p), (int)(2*p), (int)p, (Color){ 230, 230, 230, 255 });
+        } else {
+            // Narrow slit
+            DrawRectangle((int)(bx - 2*p), (int)(by - 4*p), (int)(4*p), (int)p, (Color){ 40, 20, 30, 255 });
+        }
+    } else {
+        // Smug smirk (curved pixel line)
+        DrawRectangle((int)(bx - p), (int)(by - 4*p), (int)(3*p), (int)p, (Color){ 60, 30, 40, 255 });
+        DrawRectangle((int)(bx + p), (int)(by - 5*p), (int)p, (int)p, (Color){ 60, 30, 40, 255 });
+    }
+
+    // Beard (small pixel tuft)
+    DrawRectangle((int)(bx - p), (int)(by - 3*p), (int)(2*p), (int)(2*p),
+                 (Color){ 140, 140, 150, 200 });
+    DrawRectangle((int)(bx), (int)(by - 1*p), (int)p, (int)p,
+                 (Color){ 140, 140, 150, 180 });
+
+    // Arms
+    float armSwing;
+    if (casting) {
+        // Arms raised high for spell casting
+        armSwing = -6.0f * p + sinf(gameTime * 10.0f) * 2.0f * p;
+    } else {
+        armSwing = sinf(e->wizardFloatPhase * 2.5f) * 3.0f * p;
+    }
+    // Left arm
+    DrawRectangle((int)(bx - 7*p), (int)(by - 2*p + armSwing), (int)(3*p), (int)(5*p), body);
+    // Right arm
+    DrawRectangle((int)(bx + 4*p), (int)(by - 2*p - armSwing), (int)(3*p), (int)(5*p), body);
+    // Hands (skin colored pixel squares)
+    DrawRectangle((int)(bx - 7*p), (int)(by + 2*p + armSwing), (int)(2*p), (int)(2*p), skinColor);
+    DrawRectangle((int)(bx + 5*p), (int)(by + 2*p - armSwing), (int)(2*p), (int)(2*p), skinColor);
+
+    // Staff (in right hand, square pixel art)
+    float staffX = bx + 6*p;
+    float staffY = by - 6*p - armSwing;
+    Color staffWood = { 140, 100, 60, 255 };
+    Color staffWoodDk = { 110, 75, 45, 255 };
+    DrawRectangle((int)(staffX), (int)(staffY), (int)p, (int)(14*p), staffWood);
+    DrawRectangle((int)(staffX + p), (int)(staffY), (int)p, (int)(14*p), staffWoodDk);
+    // Staff orb (square, pulsing)
+    float orbPulse = sinf(gameTime * 5.0f) * 0.4f + 0.6f;
+    int orbSz = (int)(3*p * orbPulse);
+    Color orbColor = casting
+        ? (Color){ 255, 80, 80, (unsigned char)(220 * orbPulse) }
+        : (Color){ 180, 80, 255, (unsigned char)(200 * orbPulse) };
+    Color orbInner = casting
+        ? (Color){ 255, 200, 200, (unsigned char)(255 * orbPulse) }
+        : (Color){ 220, 180, 255, (unsigned char)(255 * orbPulse) };
+    DrawRectangle((int)(staffX + p/2 - orbSz/2), (int)(staffY - orbSz), orbSz, orbSz, orbColor);
+    int innerSz = orbSz / 2;
+    if (innerSz < 1) innerSz = 1;
+    DrawRectangle((int)(staffX + p/2 - innerSz/2), (int)(staffY - orbSz + orbSz/4), innerSz, innerSz, orbInner);
+
+    // Magical floating pixel squares around wizard
+    for (int i = 0; i < 4; i++) {
+        float angle = gameTime * 2.0f + (float)i * PI * 0.5f;
+        float orbitR = 12.0f + sinf(gameTime * 3.0f + (float)i) * 4.0f;
+        float px2 = bx + cosf(angle) * orbitR;
+        float py2 = by - 4*p + sinf(angle) * orbitR;
+        unsigned char sparkAlpha = (unsigned char)(150 + (int)(sinf(gameTime * 5.0f + (float)i * 2.0f) * 80.0f));
+        int ss = (int)(p * 0.8f);
+        if (ss < 2) ss = 2;
+        DrawRectangle((int)(px2 - ss/2), (int)(py2 - ss/2), ss, ss,
+                     (Color){ 200, 150, 255, sparkAlpha });
+    }
+}
+
 void EnemyDraw(Enemy *e) {
     if (!e->active) return;
     if (e->roomId != dungeon.currentRoomId) return;
@@ -679,6 +1026,7 @@ void EnemyDraw(Enemy *e) {
         case ENEMY_BAT:      DrawBat(e); break;
         case ENEMY_SKELETON: DrawSkeleton(e); break;
         case ENEMY_TURRET:   DrawTurret(e); break;
+        case ENEMY_WIZARD:   DrawWizard(e); break;
         default: break;
     }
 
