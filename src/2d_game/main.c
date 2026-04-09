@@ -260,17 +260,26 @@ int main(void) {
         // Global volume controls (work in any state)
         {
             float volStep = 0.05f;
+            bool volChanged = false;
             if (IsKeyPressed(KEY_EQUAL) || IsKeyPressedRepeat(KEY_EQUAL)) { // + key
                 musicVolume += volStep;
                 if (musicVolume > 1.0f) musicVolume = 1.0f;
-                SetMusicVolume(titleMusic, musicVolume);
-                SetMusicVolume(gameplayMusic, musicVolume);
+                volChanged = true;
             }
             if (IsKeyPressed(KEY_MINUS) || IsKeyPressedRepeat(KEY_MINUS)) { // - key
                 musicVolume -= volStep;
                 if (musicVolume < 0.0f) musicVolume = 0.0f;
-                SetMusicVolume(titleMusic, musicVolume);
-                SetMusicVolume(gameplayMusic, musicVolume);
+                volChanged = true;
+            }
+
+            if (volChanged && musicFadeTimer <= 0.0f && bossMusicFadeTimer <= 0.0f) {
+                if (gameState.current == STATE_TITLE) {
+                    SetMusicVolume(titleMusic, musicVolume);
+                } else if (bossRoomActive) {
+                    SetMusicVolume(bossMusic, musicVolume);
+                } else {
+                    SetMusicVolume(gameplayMusic, musicVolume);
+                }
             }
             if (IsKeyPressed(KEY_RIGHT_BRACKET) || IsKeyPressedRepeat(KEY_RIGHT_BRACKET)) { // ] for SFX+
                 sfxVolume += volStep;
