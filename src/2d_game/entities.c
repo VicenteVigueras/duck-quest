@@ -135,21 +135,19 @@ void PlayerUpdate(float dt) {
         bool inDoorX = (player.pos.x > cx - doorHalfW && player.pos.x < cx + doorHalfW);
         bool inDoorY = (player.pos.y > cy - doorHalfH && player.pos.y < cy + doorHalfH);
 
-        // Allow walking through open doorways (extend bounds to room edge)
-        if (room->connections[DIR_NORTH] >= 0 && !room->doorsLocked &&
-            !(room->doorLocked[DIR_NORTH]) && inDoorX) {
+        // Allow walking INTO doorways — key-locked doors still let the player
+        // approach so DungeonCheckDoorways can consume a key / show "NEED KEY!".
+        // doorsLocked (combat-lock) remains a hard wall.
+        if (room->connections[DIR_NORTH] >= 0 && !room->doorsLocked && inDoorX) {
             minY = ROOM_Y + player.radius;
         }
-        if (room->connections[DIR_SOUTH] >= 0 && !room->doorsLocked &&
-            !(room->doorLocked[DIR_SOUTH]) && inDoorX) {
+        if (room->connections[DIR_SOUTH] >= 0 && !room->doorsLocked && inDoorX) {
             maxY = ROOM_Y + ROOM_HEIGHT - player.radius;
         }
-        if (room->connections[DIR_WEST] >= 0 && !room->doorsLocked &&
-            !(room->doorLocked[DIR_WEST]) && inDoorY) {
+        if (room->connections[DIR_WEST] >= 0 && !room->doorsLocked && inDoorY) {
             minX = ROOM_X + player.radius;
         }
-        if (room->connections[DIR_EAST] >= 0 && !room->doorsLocked &&
-            !(room->doorLocked[DIR_EAST]) && inDoorY) {
+        if (room->connections[DIR_EAST] >= 0 && !room->doorsLocked && inDoorY) {
             maxX = ROOM_X + ROOM_WIDTH - player.radius;
         }
 
