@@ -3,6 +3,7 @@
 #include "combat.h"
 #include "items.h"
 #include "boss.h"
+#include "systems.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -150,19 +151,18 @@ void DungeonGenerate(Dungeon *dun, unsigned int seed) {
         }
     }
 
-    // Lock ALL boss room doors (every connection leading to the boss room)
+    // Lock every entrance to the boss room with a key-lock.
+    // The player must find a KEY (guaranteed-spawned in a boss-adjacent room) to enter.
     for (int d = 0; d < 4; d++) {
         int nid = dun->rooms[farthestId].connections[d];
-        if (nid >= 0) {
-            // Find which direction from neighbor leads to boss
-            for (int d2 = 0; d2 < 4; d2++) {
-                if (dun->rooms[nid].connections[d2] == farthestId) {
-                    dun->rooms[nid].doorLocked[d2] = true;
-                    break;
-                }
+        if (nid < 0) continue;
+        dun->rooms[farthestId].doorLocked[d] = true;
+        // Lock the reciprocal side too so the neighbor shows the locked visual
+        for (int d2 = 0; d2 < 4; d2++) {
+            if (dun->rooms[nid].connections[d2] == farthestId) {
+                dun->rooms[nid].doorLocked[d2] = true;
+                break;
             }
-            dun->rooms[farthestId].doorLocked[d] = true;
-            // Don't break — lock ALL entrances
         }
     }
 
@@ -256,14 +256,15 @@ void DungeonCheckDoorways(void) {
                         }
                     }
                 } else {
-                    // Bounce player back
-                    float pushback = 5.0f;
+                    // Bounce player back & flash a "NEED KEY!" message on screen
+                    float pushback = 8.0f;
                     switch (d) {
                         case DIR_NORTH: player.pos.y += pushback; break;
                         case DIR_SOUTH: player.pos.y -= pushback; break;
                         case DIR_WEST:  player.pos.x += pushback; break;
                         case DIR_EAST:  player.pos.x -= pushback; break;
                     }
+                    SystemsShowLockedDoorMsg();
                     return;
                 }
             }
