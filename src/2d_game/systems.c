@@ -49,6 +49,78 @@ void ParticlesDraw(void) {
 
 #define HUD_PADDING 20.0f
 
+// Timer for the "NEED KEY!" bump feedback
+static float lockedDoorMsgTimer = 0.0f;
+
+void SystemsShowLockedDoorMsg(void) {
+    lockedDoorMsgTimer = 1.2f;
+}
+
+// True while any entrance to the boss room is still key-locked.
+static bool BossLairStillLocked(void) {
+    int bid = dungeon.bossRoomId;
+    if (bid < 0 || bid >= dungeon.roomCount) return false;
+    DungeonRoom *br = &dungeon.rooms[bid];
+    for (int d = 0; d < 4; d++) {
+        if (br->connections[d] >= 0 && br->doorLocked[d]) return true;
+    }
+    return false;
+}
+
+// Banner that guides the player to the overarching goal
+static void DrawGlobalObjective(void) {
+    // Hide while inside the boss room — local objective already handles it
+    if (dungeon.currentRoomId == dungeon.bossRoomId) return;
+    // Hide once the boss is defeated
+    if (boss.phase == BOSS_DEAD) return;
+
+    const char *msg;
+    Color col;
+
+    if (!BossLairStillLocked() || player.inventory.keys > 0) {
+        msg = "KEY FOUND  -  FIND THE BOSS LAIR";
+        col = (Color){ 120, 220, 140, 230 };
+    } else {
+        msg = "FIND THE KEY TO THE BOSS LAIR";
+        float pulse = sinf(gameTime * 2.5f) * 0.25f + 0.75f;
+        col = (Color){ 240, 210, 90, (unsigned char)(230 * pulse) };
+    }
+
+    int msgW = MeasureText(msg, 16);
+    int x = (SCREEN_WIDTH - msgW) / 2;
+    int y = (int)(ROOM_Y - 38);
+    // Shadow for readability
+    DrawText(msg, x + 2, y + 2, 16, (Color){ 0, 0, 0, 160 });
+    DrawText(msg, x, y, 16, col);
+}
+
+// Draws the "NEED KEY!" flash when the player bumps a locked door
+static void DrawLockedDoorMsg(void) {
+    if (lockedDoorMsgTimer <= 0.0f) return;
+    lockedDoorMsgTimer -= GetFrameTime();
+
+    float t = lockedDoorMsgTimer > 1.0f ? 1.0f : lockedDoorMsgTimer;
+    float alpha = t;
+    float floatUp = (1.2f - lockedDoorMsgTimer) * 20.0f;
+
+    const char *msg = "NEED  KEY!";
+    int fontSize = 36;
+    int msgW = MeasureText(msg, fontSize);
+    int x = (SCREEN_WIDTH - msgW) / 2;
+    int y = (int)(SCREEN_HEIGHT * 0.5f - 120 - floatUp);
+
+    DrawText(msg, x + 3, y + 3, fontSize, Fade((Color){ 0, 0, 0, 200 }, alpha));
+    DrawText(msg, x, y, fontSize, Fade((Color){ 255, 210, 80, 255 }, alpha));
+
+    // Sub-hint
+    const char *hint = "Find a key in the dungeon to unlock this door";
+    int hintW = MeasureText(hint, 14);
+    DrawText(hint, (SCREEN_WIDTH - hintW) / 2 + 2, y + 44, 14,
+             Fade((Color){ 0, 0, 0, 180 }, alpha));
+    DrawText(hint, (SCREEN_WIDTH - hintW) / 2, y + 42, 14,
+             Fade((Color){ 240, 220, 180, 255 }, alpha));
+}
+
 static void DrawRoomObjective(void) {
     DungeonRoom *room = DungeonGetCurrentRoom();
     const char *msg = NULL;
@@ -79,7 +151,7 @@ static void DrawRoomObjective(void) {
             break;
         case ROOM_BOSS:
             if (boss.active && boss.phase != BOSS_DEAD) {
-                msg = "BOSS  -  Defeat the Bone King";
+                msg = "BOSS  -  Defeat THE MAD DUCK";
                 msgColor = (Color){ 220, 60, 60, 160 };
             } else if (boss.phase == BOSS_DEAD) {
                 msg = "BOSS DEFEATED";
@@ -162,8 +234,12 @@ void HUDDraw(void) {
                 (int)(HUD_PADDING), (int)(imY), 14, imColor);
     }
 
-    // Room objective
+    // Global and room objectives
+    DrawGlobalObjective();
     DrawRoomObjective();
+
+    // "NEED KEY!" flash when bumping a locked door
+    DrawLockedDoorMsg();
 
     // ===== Bottom status bar panel (organized, padded, good contrast) =====
     {
@@ -367,7 +443,7 @@ void TitleScreenDraw(void) {
         "> Procedural dungeon generation (10 rooms per run)",
         "> 5 room types: Sanctuary, Combat, Treasure, Shop, Boss",
         "> 4 enemy types: Slime, Bat, Skeleton, Turret",
-        "> Boss fight: The Bone King (2 phases, 3 attack patterns)",
+        "> Boss fight: The Mad Duck (2 phases, 3 attack patterns)",
         "> Item system: hearts, upgrades, keys, coins, bombs, shields",
         "> Shop with purchasable items",
         "> Minimap with fog of war",
