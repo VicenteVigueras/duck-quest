@@ -12,6 +12,9 @@ void HUDDraw(void);
 void DrawRoomNameFlash(void);
 void ResetRoomNames(void);
 
+// Flashes a "NEED KEY!" message when the player bumps a key-locked door
+void SystemsShowLockedDoorMsg(void);
+
 // Game states
 void TitleScreenDraw(void);
 void PauseScreenDraw(void);
