@@ -108,13 +108,49 @@ static void GameInit(void) {
         }
     }
 
-    // Place a key in one of the mid-distance combat rooms
-    for (int i = 1; i < dungeon.roomCount; i++) {
-        if (dungeon.rooms[i].type == ROOM_COMBAT && dungeon.rooms[i].distance >= 2) {
-            // This room will drop a key when cleared (spawn key at center)
-            Vector2 pos = { ROOM_X + ROOM_WIDTH * 0.6f, ROOM_Y + ROOM_HEIGHT * 0.6f };
-            ItemSpawn(ITEM_KEY, pos, i, 0);
-            break;
+    // Place THE KEY in a room adjacent to the boss room.
+    // This is a guaranteed spawn — the player must find this room to access the boss.
+    {
+        int bossId = dungeon.bossRoomId;
+        int keyRoomId = -1;
+
+        // First pass: prefer combat/treasure rooms that are NOT the start room
+        for (int d = 0; d < 4; d++) {
+            int nid = dungeon.rooms[bossId].connections[d];
+            if (nid < 0 || nid == dungeon.startRoomId) continue;
+            RoomType t = dungeon.rooms[nid].type;
+            if (t == ROOM_COMBAT || t == ROOM_TREASURE) {
+                keyRoomId = nid;
+                break;
+            }
+        }
+        // Second pass: any neighbor that isn't the start room
+        if (keyRoomId < 0) {
+            for (int d = 0; d < 4; d++) {
+                int nid = dungeon.rooms[bossId].connections[d];
+                if (nid >= 0 && nid != dungeon.startRoomId) {
+                    keyRoomId = nid;
+                    break;
+                }
+            }
+        }
+        // Last resort: any neighbor
+        if (keyRoomId < 0) {
+            for (int d = 0; d < 4; d++) {
+                int nid = dungeon.rooms[bossId].connections[d];
+                if (nid >= 0) { keyRoomId = nid; break; }
+            }
+        }
+
+        if (keyRoomId >= 0) {
+            // Offset so the key doesn't overlap a treasure-room upgrade
+            float kx = ROOM_X + ROOM_WIDTH * 0.35f;
+            float ky = ROOM_Y + ROOM_HEIGHT * 0.5f;
+            if (dungeon.rooms[keyRoomId].type == ROOM_TREASURE) {
+                kx = ROOM_X + ROOM_WIDTH * 0.75f;
+            }
+            Vector2 pos = { kx, ky };
+            ItemSpawn(ITEM_KEY, pos, keyRoomId, 0);
         }
     }
 
@@ -336,7 +372,7 @@ int main(void) {
                 // DEBUG: Teleport to boss room
                 if (IsKeyPressed(KEY_P)) {
                     int bossId = dungeon.bossRoomId;
-                    // Unlock all boss doors so we can enter
+                    // Unlock the key-locks both sides so doors visually open
                     for (int d = 0; d < 4; d++) {
                         dungeon.rooms[bossId].doorLocked[d] = false;
                         int nid = dungeon.rooms[bossId].connections[d];
@@ -348,14 +384,12 @@ int main(void) {
                             }
                         }
                     }
-                    // Give player a key and sword just in case
                     player.hasSword = true;
-                    player.inventory.keys++;
-                    // Move to boss room
                     dungeon.currentRoomId = bossId;
                     dungeon.rooms[bossId].visited = true;
                     player.pos = (Vector2){ ROOM_X + ROOM_WIDTH * 0.5f, ROOM_Y + ROOM_HEIGHT * 0.7f };
-                    // Init boss if not already
+                    // Lock combat doors so player can't leave during boss fight
+                    dungeon.rooms[bossId].doorsLocked = true;
                     if (!boss.active && boss.phase != BOSS_DEAD) {
                         BossInit(bossId);
                     }
