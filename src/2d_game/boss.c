@@ -46,7 +46,23 @@ static void SpawnFeathers(Vector2 origin, int count, float speedMin, float speed
     }
 }
 
+// Count currently-active duckling minions so the summon cap stays accurate
+// even when the player has killed some. Fixes a bug where minionCount was
+// incremented on spawn but never decremented, silently disabling summons.
+static int BossCountActiveMinions(void) {
+    int n = 0;
+    for (int j = 0; j < MAX_ENEMIES; j++) {
+        if (enemies[j].active &&
+            enemies[j].type == ENEMY_BAT &&
+            enemies[j].roomId == dungeon.bossRoomId) {
+            n++;
+        }
+    }
+    return n;
+}
+
 static void BossSpawnMinions(void) {
+    boss.minionCount = BossCountActiveMinions();
     if (boss.minionCount >= 4) return;
 
     for (int i = 0; i < 2; i++) {
@@ -85,6 +101,9 @@ void BossUpdate(float dt) {
 
     if (boss.flashTimer > 0) boss.flashTimer -= dt;
     boss.animTimer += dt;
+
+    // Keep minionCount truthful every frame so the cap check in spawn works.
+    boss.minionCount = BossCountActiveMinions();
 
     // Phase transition — duck gets angrier, feathers ruffled
     if (boss.health <= BOSS_MAX_HEALTH * 0.5f && boss.phase == BOSS_PHASE_1) {
@@ -148,9 +167,11 @@ void BossUpdate(float dt) {
         return;
     }
 
-    // Knockback
+    // Knockback (clamp the decay factor so large dt spikes can't flip direction)
     boss.pos = Vec2Add(boss.pos, Vec2Scale(boss.knockback, dt));
-    boss.knockback = Vec2Scale(boss.knockback, 1.0f - (KNOCKBACK_DECAY * 0.5f * dt));
+    float kbFactor = 1.0f - (KNOCKBACK_DECAY * 0.5f * dt);
+    if (kbFactor < 0.0f) kbFactor = 0.0f;
+    boss.knockback = Vec2Scale(boss.knockback, kbFactor);
     if (Vec2Length(boss.knockback) < 5.0f) boss.knockback = (Vector2){ 0, 0 };
 
     // Keep in bounds
@@ -319,45 +340,89 @@ void BossDraw(void) {
     // Waddle: tiny whole-sprite hop (1 big-pixel up/down, toggles every step)
     int step = ((int)(boss.animTimer * 4.0f)) & 1;
     int hop  = step ? -p : 0;
-    // Phase 2: angry shake (random horizontal jitter of 1 pixel)
+    // Phase 2: angry shake — deterministic, not random-per-frame, so high
+    // refresh rates don't strobe. Alternates every animTimer tick.
     int shake = 0;
-    if (phase2) shake = (GetRandomValue(0, 1) == 0) ? -1 : 1;
+    if (phase2) shake = (((int)(boss.animTimer * 20.0f)) & 1) ? 1 : -1;
 
-    // Top-left anchor so the duck is centered on (bx, by)
-    int x0 = (int)(bx - sw * 0.5f) + shake;
-    int y0 = (int)(by - sh * 0.5f) + hop;
+    // Top-left anchor snapped to the big-pixel grid so the sprite never
+    // sub-pixel-crawls between positions — keeps the 8-bit feel clean.
+    int x0 = ((int)(bx - sw * 0.5f) / p) * p + shake;
+    int y0 = ((int)(by - sh * 0.5f) / p) * p + hop;
 
     // Shadow (stays put while duck hops)
     DrawRectangle((int)(bx - sw * 0.5f + p), (int)(by + sh * 0.45f),
                   sw - 2 * p, (p < 4 ? 4 : p), (Color){ 0, 0, 0, 90 });
 
-    // Phase 2 rage aura (still a rectangle to keep the 8-bit look)
+    // Phase 2 rage aura — dithered checkerboard of solid red big-pixels
+    // (no alpha blending) for a proper NES-era look.
     if (boss.phase == BOSS_PHASE_2) {
-        int pulse = (int)(sinf(gameTime * 4.0f) * 2.0f);
-        DrawRectangle(x0 - p - pulse, y0 - p - pulse,
-                      sw + 2 * (p + pulse), sh + 2 * (p + pulse),
-                      (Color){ 255, 80, 40, 30 });
+        int pulse = (((int)(gameTime * 4.0f)) & 1) ? 1 : 0;
+        int frameBit = ((int)(gameTime * 10.0f)) & 1;
+        int ax = x0 - p - pulse * p;
+        int ay = y0 - p - pulse * p;
+        int aw = sw + 2 * p + 2 * pulse * p;
+        int ah = sh + 2 * p + 2 * pulse * p;
+        Color auraColor = { 230, 60, 30, 255 };
+        for (int yy = 0; yy < ah; yy += p) {
+            for (int xx = 0; xx < aw; xx += p) {
+                // Only draw the ring — skip pixels that fall inside the sprite box
+                if (xx >= p && xx < aw - p && yy >= p && yy < ah - p) continue;
+                int checker = ((xx / p) + (yy / p) + frameBit) & 1;
+                if (checker == 0) continue;
+                DrawRectangle(ax + xx, ay + yy, p, p, auraColor);
+            }
+        }
     }
 
-    // Eye pupil tracking (offset in big-pixels, clamped to ±1)
+    // Eye pupil tracking (offset in big-pixels, clamped to ±1 on both axes)
     int pupilDx = 0, pupilDy = 0;
     {
         Vector2 toPlayer = Vec2Sub(player.pos, boss.pos);
         if (fabsf(toPlayer.x) > 40.0f) pupilDx = (toPlayer.x > 0) ? 1 : -1;
-        if (toPlayer.y > 40.0f) pupilDy = 1;
+        if (fabsf(toPlayer.y) > 60.0f) pupilDy = (toPlayer.y > 0) ? 1 : -1;
     }
 
-    // Beak open/close (swap pupils with mouth open is already handled by frame)
-    bool beakOpen = (sinf(boss.animTimer * 4.0f) > 0.3f) || boss.chargeWindup > 0.0f;
+    // Beak open/close — integer-frame animation (NES-style), not sinusoidal.
+    // Four-frame cycle: open on frames 0 and 2, closed on 1 and 3.
+    int beakFrame = ((int)(boss.animTimer * 6.0f)) & 3;
+    bool beakOpen = (beakFrame == 0 || beakFrame == 2) || boss.chargeWindup > 0.0f;
 
     // Wing flap — alternate which big-pixel row of the body is "shadowed"
     // to simulate a wing moving up/down.  Purely integer: no floats.
     int flapPhase = ((int)(boss.animTimer * (phase2 ? 10.0f : 6.0f))) & 1;
 
+    // Weak-point sparkle: the crown gem alternates between two palette
+    // colors every frame. This is purely cosmetic 8-bit flavour; a gameplay
+    // weak-point window piggybacks on this in the draw loop below.
+    int gemSparkle = ((int)(boss.animTimer * 8.0f)) & 1;
+
+    // Death dissolve: during BOSS_DYING, progressively erase random body
+    // pixels (deterministic per-pixel from a stable hash) for a ROM-style
+    // dissolve before the final explosion. Integer-only, no alpha.
+    float dissolve = 0.0f;
+    if (boss.phase == BOSS_DYING) {
+        // stateTimer counts down from 2.0 to 0; convert to 0..1 progress
+        float progress = 1.0f - (boss.stateTimer / 2.0f);
+        if (progress < 0.0f) progress = 0.0f;
+        if (progress > 1.0f) progress = 1.0f;
+        dissolve = progress;
+    }
+
     for (int sy = 0; sy < 13; sy++) {
         for (int sx = 0; sx < 11; sx++) {
             char code = MAD_DUCK_SPRITE[sy][sx];
             if (code == '.') continue;
+
+            // Dissolve: deterministic per-pixel threshold based on (sx,sy)
+            // so the sprite breaks up in a stable, pattern-like way instead
+            // of static noise. Each pixel has a 0..1 "rank"; erase it once
+            // dissolve >= rank.
+            if (dissolve > 0.0f) {
+                int h = (sx * 7 + sy * 13 + sx * sy) & 0xFF;
+                float rank = (float)h / 255.0f;
+                if (dissolve > rank) continue;
+            }
 
             Color c;
             switch (code) {
@@ -368,23 +433,30 @@ void BossDraw(void) {
                 case 'W': c = eyeWhite; break;
                 case 'K': c = eyePupil; break;
                 case 'C': c = crownColor; break;
-                case 'G': c = gemColor; break;
+                case 'G':
+                    // Sparkle: swap between the gem color and a bright
+                    // highlight every frame for classic NES twinkle.
+                    c = gemSparkle ? gemColor
+                                   : (Color){ 255, 220, 230, 255 };
+                    break;
                 default:  continue;
             }
 
             int dx = sx, dy = sy;
 
-            // Pupil tracking: shift pupil pixels by ±1 big-pixel within eye
+            // Pupil tracking: shift pupil pixels by ±1 big-pixel within eye.
+            // Eyes sit at row 3. Left eye pupil col 4 (white at col 3),
+            // right eye pupil col 7 (white at col 6).
             if (code == 'K') {
-                // Left eye pupil is at col 4, right is at col 7
-                // Keep pupil inside the eye white area (cols 3/6 are white)
                 if (sx == 4 && pupilDx < 0) dx = 3;
                 if (sx == 7 && pupilDx < 0) dx = 6;
-                // pupilDx>0 means pupil shifts right; it's already at the right edge
-                if (pupilDy > 0) dy = sy + (pupilDy > 0 ? 0 : 0); // keep same row
+                // pupilDx > 0: pupil already at its rightmost within the eye.
+                // Vertical: nudge down by 1 big-pixel when player is below;
+                // (up-look stays at eye row since there's no white row above).
+                if (pupilDy > 0) dy = sy + 1;
             }
 
-            // Beak swap: when closed, make the O at (row4, col9) into body
+            // Beak swap: when closed, hide the lower beak pixels
             if (!beakOpen && sy == 4 && sx == 9) continue;
             if (!beakOpen && sy == 5 && sx == 8) continue;
 
@@ -404,28 +476,66 @@ void BossDraw(void) {
 
     // Charge telegraph: three little red exclamation squares above crown
     if (boss.chargeWindup > 0.0f) {
-        int cs = (int)(sinf(boss.animTimer * 25.0f) * p * 0.5f);
+        int cs = (((int)(boss.animTimer * 25.0f)) & 1) ? p : 0;
         Color angryRed = { 240, 70, 70, 255 };
         DrawRectangle(x0 + 2 * p + cs, y0 - 2 * p, p, p, angryRed);
         DrawRectangle(x0 + 5 * p,      y0 - 3 * p, p, p, angryRed);
         DrawRectangle(x0 + 8 * p - cs, y0 - 2 * p, p, p, angryRed);
+
+        // Dashed pixel-line from boss to chargeTarget so the player can
+        // clearly read where the duck is about to lunge and sidestep it.
+        // Built from discrete big-pixel squares (no AA lines).
+        Vector2 dir = Vec2Sub(boss.chargeTarget, boss.pos);
+        float dist = Vec2Length(dir);
+        if (dist > 1.0f) {
+            float nx = dir.x / dist;
+            float ny = dir.y / dist;
+            int steps = (int)(dist / (p * 2));
+            int dashPhase = ((int)(boss.animTimer * 12.0f)) & 1;
+            for (int s = 1; s < steps; s++) {
+                if (((s + dashPhase) & 1) == 0) continue;
+                int lx = (int)(boss.pos.x + nx * s * p * 2) - p / 2;
+                int ly = (int)(boss.pos.y + ny * s * p * 2) - p / 2;
+                DrawRectangle(lx, ly, p, p, angryRed);
+            }
+        }
     }
 
-    // ---- Health bar + name (unchanged styling, pixel-clean) ----
-    float barW = 220.0f;
-    float barH = 12.0f;
-    float barX = bx - barW / 2;
-    float barY = by - r - 60.0f;
+    // ---- Health bar as 20 discrete pips (NES-style), pixel-clean ----
     float healthRatio = boss.health / boss.maxHealth;
-    if (healthRatio < 0) healthRatio = 0;
+    if (healthRatio < 0.0f) healthRatio = 0.0f;
+    if (healthRatio > 1.0f) healthRatio = 1.0f;
 
-    DrawRectangle((int)barX, (int)barY, (int)barW, (int)barH, (Color){ 30, 30, 30, 200 });
-    Color hpColor = phase2 ? (Color){ 220, 60, 50, 255 } : (Color){ 240, 200, 70, 255 };
-    DrawRectangle((int)barX, (int)barY, (int)(barW * healthRatio), (int)barH, hpColor);
-    DrawRectangleLinesEx((Rectangle){ barX, barY, barW, barH }, 1, (Color){ 100, 100, 100, 200 });
+    const int PIPS = 20;
+    int pipW = 10;
+    int pipH = 10;
+    int pipGap = 2;
+    int barTotalW = PIPS * pipW + (PIPS - 1) * pipGap;
+    int barX = (int)(bx - barTotalW / 2);
+    int barY = (int)(by - r - 60.0f);
+
+    // Backing frame (solid, no alpha — dark border)
+    DrawRectangle(barX - 2, barY - 2, barTotalW + 4, pipH + 4, (Color){ 20, 20, 20, 255 });
+
+    int litPips = (int)(healthRatio * PIPS + 0.5f);
+    Color hpColor = phase2 ? (Color){ 220, 60, 50, 255 }
+                           : (Color){ 240, 200, 70, 255 };
+    Color emptyColor = (Color){ 60, 40, 40, 255 };
+    for (int i = 0; i < PIPS; i++) {
+        int px = barX + i * (pipW + pipGap);
+        DrawRectangle(px, barY, pipW, pipH, i < litPips ? hpColor : emptyColor);
+    }
 
     const char *bossName = phase2 ? "THE MAD DUCK  -  ENRAGED" : "THE MAD DUCK";
     int nameW = MeasureText(bossName, 14);
-    DrawText(bossName, (int)(bx - nameW / 2), (int)(barY - 16), 14,
-             (Color){ 255, 230, 180, 220 });
+    int nameX = (int)(bx - nameW / 2);
+    int nameY = barY - 18;
+    // Chunky 1-bit outline: draw text 4 times offset in black, then once in body color
+    Color outline = (Color){ 20, 10, 10, 255 };
+    Color nameColor = (Color){ 255, 230, 180, 255 };
+    DrawText(bossName, nameX - 1, nameY,     14, outline);
+    DrawText(bossName, nameX + 1, nameY,     14, outline);
+    DrawText(bossName, nameX,     nameY - 1, 14, outline);
+    DrawText(bossName, nameX,     nameY + 1, 14, outline);
+    DrawText(bossName, nameX,     nameY,     14, nameColor);
 }
