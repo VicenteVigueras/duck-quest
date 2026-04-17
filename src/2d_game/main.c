@@ -10,6 +10,7 @@
 #include "items.h"
 #include "boss.h"
 #include "minimap.h"
+#include "palette.h"
 #include <string.h>
 #include <time.h>
 
@@ -481,7 +482,7 @@ int main(void) {
          */
 
         BeginDrawing();
-        ClearBackground((Color){ 0, 0, 0, 255 }); // Black letterbox
+        ClearBackground(PAL_INK); // Palette-consistent letterbox
 
         // Center all content for any window size
         rlPushMatrix();
@@ -495,8 +496,8 @@ int main(void) {
 
             case STATE_GAMEPLAY:
             case STATE_PAUSE: {
-                // Dark background for game area
-                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, (Color){ 12, 10, 18, 255 });
+                // Palette-consistent backdrop behind the room
+                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, PAL_NIGHT);
 
                 // Screen shake offset
                 Vector2 shakeOffset = ScreenShakeGetOffset();
@@ -551,7 +552,7 @@ int main(void) {
             }
 
             case STATE_GAME_OVER: {
-                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, (Color){ 12, 10, 18, 255 });
+                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, PAL_NIGHT);
                 DungeonRoom *room = DungeonGetCurrentRoom();
                 DrawRoomBackground(room, ROOM_X, ROOM_Y);
                 DrawRoomWalls(room, ROOM_X, ROOM_Y);
@@ -560,7 +561,7 @@ int main(void) {
             }
 
             case STATE_VICTORY: {
-                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, (Color){ 12, 10, 18, 255 });
+                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, PAL_NIGHT);
                 DungeonRoom *room = DungeonGetCurrentRoom();
                 DrawRoomBackground(room, ROOM_X, ROOM_Y);
                 DrawRoomWalls(room, ROOM_X, ROOM_Y);
