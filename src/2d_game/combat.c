@@ -32,6 +32,10 @@ Vector2 ScreenShakeGetOffset(void) {
     if (screenShake.duration <= 0.0f) return (Vector2){ 0, 0 };
     float sx = sinf(gameTime * screenShake.frequency) * screenShake.intensity;
     float sy = cosf(gameTime * screenShake.frequency * 1.3f) * screenShake.intensity;
+    // Snap to integer pixels — sub-pixel shake blurs the pixel art and
+    // breaks the 8-bit feel. Round-half-away-from-zero.
+    sx = (sx >= 0.0f) ? floorf(sx + 0.5f) : ceilf(sx - 0.5f);
+    sy = (sy >= 0.0f) ? floorf(sy + 0.5f) : ceilf(sy - 0.5f);
     return (Vector2){ sx, sy };
 }
 
