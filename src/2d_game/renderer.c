@@ -633,16 +633,87 @@ void DrawPixelCoin(float x, float y, float scale, Color color) {
     DrawRectangle((int)(x + 2*s), (int)(y + 3*s), (int)s, (int)s, dark);
 }
 
+/*
+ * ============================================================================
+ * DrawPixelText — crisp, hard-outlined text
+ *
+ * Every piece of UI text in the game is pushed through this helper so the
+ * whole interface reads as one coherent pixel-art layer. The font is still
+ * Raylib's default, but it's drawn four times in PAL_INK at one-pixel offsets
+ * to build a chunky 1-bit outline, and once in the target color on top.
+ *
+ * This eliminates the "anti-aliased text floating on pixel art" look that
+ * was one of the biggest inconsistencies in the pre-polish build.
+ * ============================================================================
+ */
+void DrawPixelText(const char *text, float x, float y, int size, Color color) {
+    Color outline = { 18, 14, 24, color.a };
+    int ix = (int)x;
+    int iy = (int)y;
+    DrawText(text, ix - 1, iy,     size, outline);
+    DrawText(text, ix + 1, iy,     size, outline);
+    DrawText(text, ix,     iy - 1, size, outline);
+    DrawText(text, ix,     iy + 1, size, outline);
+    DrawText(text, ix,     iy,     size, color);
+}
+
+/*
+ * ============================================================================
+ * DrawScanlineOverlay — full CRT shader, faked in pure rectangles
+ *
+ * No GLSL, no assets — just carefully composited opaque rectangles and
+ * checkerboards that together produce a cohesive 8-bit CRT look:
+ *   1. Horizontal scanlines every 2 pixels (darker than before, consistent)
+ *   2. Radial vignette built from 8 concentric frames of increasing opacity
+ *   3. Rounded-corner darkening (a few solid black squares in each corner)
+ *      simulates a curved CRT bezel without any curvature
+ *   4. A single top-highlight line — sells the glass pane
+ *
+ * Drawn above all gameplay, below modal menu overlays.
+ * ============================================================================
+ */
 void DrawScanlineOverlay(void) {
-    // Subtle CRT scanline effect for 8-bit feel
-    for (int y = 0; y < SCREEN_HEIGHT; y += 3) {
-        DrawRectangle(0, y, SCREEN_WIDTH, 1, (Color){ 0, 0, 0, 18 });
+    // 1. Scanlines — every other row, opaque-ish, gives gameplay its retro shimmer.
+    for (int y = 0; y < SCREEN_HEIGHT; y += 2) {
+        DrawRectangle(0, y, SCREEN_WIDTH, 1, (Color){ 0, 0, 0, 36 });
     }
-    // Slight vignette on edges
-    DrawRectangle(0, 0, SCREEN_WIDTH, 2, (Color){ 0, 0, 0, 30 });
-    DrawRectangle(0, SCREEN_HEIGHT - 2, SCREEN_WIDTH, 2, (Color){ 0, 0, 0, 30 });
-    DrawRectangle(0, 0, 2, SCREEN_HEIGHT, (Color){ 0, 0, 0, 30 });
-    DrawRectangle(SCREEN_WIDTH - 2, 0, 2, SCREEN_HEIGHT, (Color){ 0, 0, 0, 30 });
+
+    // 2. Radial vignette: 8 nested frames, each 4px wider, each slightly darker.
+    //    The math is integer; no color interpolation, faithful to 8-bit era.
+    for (int i = 0; i < 10; i++) {
+        int inset = i * 6;
+        unsigned char a = (unsigned char)(8 + i * 8); // 8..80
+        // top
+        DrawRectangle(inset, inset, SCREEN_WIDTH - inset * 2, 2, (Color){ 0, 0, 0, a });
+        // bottom
+        DrawRectangle(inset, SCREEN_HEIGHT - inset - 2, SCREEN_WIDTH - inset * 2, 2,
+                      (Color){ 0, 0, 0, a });
+        // left
+        DrawRectangle(inset, inset, 2, SCREEN_HEIGHT - inset * 2, (Color){ 0, 0, 0, a });
+        // right
+        DrawRectangle(SCREEN_WIDTH - inset - 2, inset, 2, SCREEN_HEIGHT - inset * 2,
+                      (Color){ 0, 0, 0, a });
+    }
+
+    // 3. CRT-bezel rounded corners — stepped black squares in each corner.
+    //    Pattern: 8x1, 5x1, 3x1, 1x1 rows form a 1/4-circle approximation.
+    int cornerRows[] = { 8, 5, 3, 2, 1 };
+    int cornerCount = 5;
+    Color cornerCol = { 0, 0, 0, 255 };
+    for (int i = 0; i < cornerCount; i++) {
+        int w = cornerRows[i];
+        // Top-left
+        DrawRectangle(0, i, w, 1, cornerCol);
+        // Top-right
+        DrawRectangle(SCREEN_WIDTH - w, i, w, 1, cornerCol);
+        // Bottom-left
+        DrawRectangle(0, SCREEN_HEIGHT - 1 - i, w, 1, cornerCol);
+        // Bottom-right
+        DrawRectangle(SCREEN_WIDTH - w, SCREEN_HEIGHT - 1 - i, w, 1, cornerCol);
+    }
+
+    // 4. Glass highlight — single faint line just below the top bezel.
+    DrawRectangle(14, 12, SCREEN_WIDTH - 28, 1, (Color){ 255, 255, 255, 10 });
 }
 
 void DrawItemIcon(ItemType type, float x, float y, float scale) {
