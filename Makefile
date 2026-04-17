@@ -47,13 +47,13 @@ $(TARGET): $(BUILD_DIR) $(OBJS)
 	@echo "Build complete! Run with: $(TARGET)"
 
 # Compile rules
-$(BUILD_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/entities.h $(SRC_DIR)/systems.h $(SRC_DIR)/dungeon.h $(SRC_DIR)/renderer.h $(SRC_DIR)/combat.h $(SRC_DIR)/items.h $(SRC_DIR)/boss.h $(SRC_DIR)/minimap.h
+$(BUILD_DIR)/main.o: $(SRC_DIR)/main.c $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/entities.h $(SRC_DIR)/systems.h $(SRC_DIR)/dungeon.h $(SRC_DIR)/renderer.h $(SRC_DIR)/combat.h $(SRC_DIR)/items.h $(SRC_DIR)/boss.h $(SRC_DIR)/minimap.h $(SRC_DIR)/palette.h
 	$(CC) $(CFLAGS) $(RAYLIB_INCLUDE) -c $< -o $@
 
 $(BUILD_DIR)/entities.o: $(SRC_DIR)/entities.c $(SRC_DIR)/entities.h $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/combat.h $(SRC_DIR)/dungeon.h $(SRC_DIR)/items.h
 	$(CC) $(CFLAGS) $(RAYLIB_INCLUDE) -c $< -o $@
 
-$(BUILD_DIR)/systems.o: $(SRC_DIR)/systems.c $(SRC_DIR)/systems.h $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/renderer.h $(SRC_DIR)/dungeon.h $(SRC_DIR)/minimap.h
+$(BUILD_DIR)/systems.o: $(SRC_DIR)/systems.c $(SRC_DIR)/systems.h $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/renderer.h $(SRC_DIR)/dungeon.h $(SRC_DIR)/minimap.h $(SRC_DIR)/palette.h
 	$(CC) $(CFLAGS) $(RAYLIB_INCLUDE) -c $< -o $@
 
 $(BUILD_DIR)/dungeon.o: $(SRC_DIR)/dungeon.c $(SRC_DIR)/dungeon.h $(SRC_DIR)/types.h $(SRC_DIR)/utils.h $(SRC_DIR)/combat.h $(SRC_DIR)/items.h $(SRC_DIR)/boss.h
